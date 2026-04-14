@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高句丽瓦当数智化手势交互 | Goguryeo Particle System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        museum: '#000000',
+                        gold: '#FFD700',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #000000; overflow: hidden; margin: 0; user-select: none; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
+
+        #progress-ring {
+            transition: stroke-dashoffset 0.05s linear;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        .panel-transition {
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+    </style>
+
+    <!-- MediaPipe Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body class="text-white font-sans h-screen w-screen">
+
+    <div id="canvas-container" class="absolute inset-0 z-0"></div>
+
+    <!-- Title UI -->
+    <div class="absolute left-10 top-10 z-10 pointer-events-none">
+        <h1 class="text-3xl md:text-4xl font-normal tracking-[0.18em] text-white/90 drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)] mb-3">
+            高句丽瓦当数智化手势交互
+        </h1>
+        <p class="text-[11px] md:text-xs text-white/60 font-light tracking-[0.35em] uppercase mb-4">
+            Goguryeo Wadang Digital Gesture Interaction
+        </p>
+        <div class="w-56 h-[1px] bg-gradient-to-r from-gold/50 to-transparent"></div>
+    </div>
+
+    <!-- Collapsible Upload Panel -->
+    <div id="upload-panel" class="absolute right-8 top-8 w-80 glass-panel rounded-xl flex flex-col z-20 panel-transition max-h-[50vh] overflow-hidden">
+        <div id="panel-header" class="flex items-center justify-between p-4 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors" onclick="toggleUploadPanel()">
+            <div id="header-content" class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                <span class="text-sm font-light tracking-widest text-white/90">数据模型导入</span>
+            </div>
+            <button id="fold-icon-wrapper" class="text-white/40 hover:text-white">
+                <svg id="fold-svg" class="w-5 h-5 panel-transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+            </button>
+        </div>
+
+        <div id="panel-body" class="p-5 flex flex-col gap-4 overflow-hidden opacity-100 transition-opacity duration-300">
+            <div>
+                <label for="file-upload" class="cursor-pointer flex items-center justify-center w-full h-14 border border-dashed border-white/20 hover:border-white/80 hover:bg-white/5 rounded-lg transition-all duration-300">
+                    <span class="text-xs tracking-widest font-light text-gray-300">点击选择 OBJ 多文件</span>
+                    <input id="file-upload" type="file" multiple accept=".obj" class="hidden">
+                </label>
+            </div>
+
+            <div class="flex-1 overflow-y-auto min-h-0">
+                <h3 class="text-[10px] text-gray-500 font-light tracking-wider mb-2 uppercase">模型队列 <span id="file-count">(0)</span></h3>
+                <ul id="file-list" class="space-y-1.5 text-[11px] font-light">
+                    <li class="text-gray-600 italic">暂无模型，星云混沌。</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Knowledge Card -->
+    <div class="absolute bottom-16 right-10 w-[420px] glass-panel rounded-2xl p-8 z-10 transition-all duration-700 opacity-0 transform translate-x-12" id="ai-panel">
+        <div class="flex items-start gap-4 mb-6">
+            <div class="w-1.5 h-10 bg-gold mt-1"></div>
+            <h2 id="ai-title" class="text-3xl font-normal tracking-wider text-white/95 leading-tight">文物详情</h2>
+        </div>
+
+        <div class="relative">
+            <p id="ai-text" class="text-base leading-relaxed text-gray-200 font-light text-justify tracking-wide">
+                正在感应时空频率，解析纹饰信息...
+            </p>
+        </div>
+        
+        <div class="mt-8 pt-6 border-t border-white/10 flex justify-between items-center">
+            <span class="text-[11px] text-white/30 tracking-[0.3em] uppercase font-light">Goguryeo Digital Archive</span>
+            <div class="flex gap-1.5">
+                <div class="w-1.5 h-1.5 rounded-full bg-gold/60 animate-pulse"></div>
+                <div class="w-1.5 h-1.5 rounded-full bg-gold/30"></div>
+                <div class="w-1.5 h-1.5 rounded-full bg-gold/10"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gesture Overlay -->
+    <div class="absolute bottom-8 left-10 w-72 aspect-video glass-panel rounded-xl overflow-hidden z-10 shadow-2xl group">
+        <video id="video-input" class="hidden"></video>
+        <canvas id="hands-canvas" class="w-full h-full object-cover transform scale-x-[-1] opacity-0 transition-opacity duration-500"></canvas>
+        
+        <div id="start-cam-overlay" class="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm cursor-pointer hover:bg-black/40 transition-all duration-300 z-20 text-center">
+            <svg class="w-10 h-10 text-white/50 mb-3 group-hover:text-gold transition-colors duration-300 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+            </svg>
+            <span class="text-[10px] tracking-widest text-white/70 font-light block mb-1">点击开启手势交互</span>
+            <span class="text-[9px] tracking-wider text-gray-500 font-light block px-2">OK手势(1.5秒):切换 | 握拳(1秒):虚实转换</span>
+        </div>
+
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <svg class="w-14 h-14 opacity-80" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="4"/>
+                <circle id="progress-ring" cx="50" cy="50" r="45" fill="none" stroke="#FFD700" stroke-width="4" 
+                        stroke-dasharray="282.7" stroke-dashoffset="282.7" stroke-linecap="round"/>
+            </svg>
+        </div>
+        
+        <div class="absolute top-2 left-2 bg-black/50 rounded px-2 py-1 text-[9px] text-white/80 backdrop-blur flex items-center gap-2 z-10">
+            <div id="cam-status" class="w-1.5 h-1.5 rounded-full bg-gray-500"></div>
+            <span id="cam-status-text">追踪识别中</span>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
+        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 全局状态 ---
+        const PARTICLE_COUNT = 200000;
+        const STATE = {
+            files: [], 
+            currentIndex: -1, 
+            isMorphing: false, 
+            morphProgress: 0, 
+            isSolidMode: false, 
+            solidMorphProgress: 0, 
+            currentSolidMesh: null,
+            targetRotationY: 0, currentRotationY: 0, 
+            targetRotationX: 0, currentRotationX: 0,
+            targetScale: 1.0, currentScale: 1.0, 
+            actionProgress: 0, 
+            isCooldown: false,
+            lastFrameTime: performance.now(),
+            isPanelFolded: false
+        };
+
+        const KNOWLEDGE_BASE = {
+            "兽面纹": "兽面纹瓦当的数量在高句丽时期仅次于莲花纹瓦当。兽面纹瓦当多是与中原文化中的兽纹与饕餮纹演化而来的。高句丽受其影响注入了东北地区东北虎的形象。从而形成了高句丽人典型的兽面纹饰题材。<br><br>兽面纹的形成也是一种对强者的崇拜，寓意着强大，力量，牢固与邪祟不得靠近的庄严形象。"
+        };
+
+        window.toggleUploadPanel = function() {
+            const panel = document.getElementById('upload-panel');
+            const body = document.getElementById('panel-body');
+            const headerText = document.getElementById('header-content');
+            const foldSvg = document.getElementById('fold-svg');
+            STATE.isPanelFolded = !STATE.isPanelFolded;
+            if (STATE.isPanelFolded) {
+                panel.style.width = '52px'; panel.style.height = '52px'; panel.style.borderRadius = '26px';
+                body.style.opacity = '0'; headerText.style.opacity = '0';
+                foldSvg.style.transform = 'rotate(-135deg) scale(1.2)'; foldSvg.style.color = '#FFD700';
+                setTimeout(() => { if(STATE.isPanelFolded) body.style.display = 'none'; }, 300);
+            } else {
+                panel.style.width = '320px'; panel.style.height = 'auto'; panel.style.borderRadius = '12px';
+                body.style.display = 'flex';
+                setTimeout(() => { body.style.opacity = '1'; headerText.style.opacity = '1'; }, 10);
+                foldSvg.style.transform = 'rotate(0deg)'; foldSvg.style.color = '';
+            }
+        };
+
+        // --- 初始化渲染 ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.02);
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 5;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setClearColor(0x000000);
+        container.appendChild(renderer.domElement);
+
+        // --- 光影增强方案 ---
+        scene.add(new THREE.AmbientLight(0xffffff, 0.75)); // 增强基础环境亮度
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.4); // 增强主光强度
+        dirLight.position.set(5, 5, 5);
+        scene.add(dirLight);
+
+        // 新增补光光源，增加侧影层次感
+        const pointLight = new THREE.PointLight(0xffffff, 0.8);
+        pointLight.position.set(-5, 3, 2);
+        scene.add(pointLight);
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.0; bloomPass.strength = 0.8; bloomPass.radius = 0.5;
+        composer.addPass(bloomPass);
+
+        const mainGroup = new THREE.Group();
+        scene.add(mainGroup);
+
+        // --- 粒子系统 ---
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(PARTICLE_COUNT * 3);
+        const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+        const randoms = new Float32Array(PARTICLE_COUNT);
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const r = 3 * Math.cbrt(Math.random());
+            const theta = Math.random() * 2 * Math.PI;
+            const phi = Math.acos(2 * Math.random() - 1);
+            positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            positions[i * 3 + 2] = r * Math.cos(phi);
+            targetPositions[i * 3] = positions[i * 3];
+            targetPositions[i * 3 + 1] = positions[i * 3 + 1];
+            targetPositions[i * 3 + 2] = positions[i * 3 + 2];
+            randoms[i] = Math.random();
+        }
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('targetPosition', new THREE.BufferAttribute(targetPositions, 3));
+        geometry.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
+
+        const shaderMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uMorphProgress: { value: 0 },
+                uSolidProgress: { value: 0 },
+                uColorTop: { value: new THREE.Color('#FFF5E1') },
+                uColorMid: { value: new THREE.Color('#FFD700') },
+                uColorBottom: { value: new THREE.Color('#FF9E3D') }
+            },
+            vertexShader: `
+                uniform float uTime;
+                uniform float uMorphProgress;
+                attribute vec3 targetPosition;
+                attribute float aRandom;
+                varying vec3 vColor;
+                varying vec3 vPos;
+                uniform vec3 uColorTop;
+                uniform vec3 uColorMid;
+                uniform vec3 uColorBottom;
+
+                void main() {
+                    vec3 chaosPos = position;
+                    chaosPos.x += sin(uTime * 0.5 + aRandom * 10.0) * 0.2;
+                    chaosPos.y += cos(uTime * 0.6 + aRandom * 10.0) * 0.2;
+                    chaosPos.z += sin(uTime * 0.4 + aRandom * 10.0) * 0.2;
+                    float easeProgress = smoothstep(0.0, 1.0, uMorphProgress);
+                    vec3 finalPos = mix(chaosPos, targetPosition, easeProgress);
+                    vPos = finalPos;
+
+                    float mixVal = smoothstep(-2.0, 2.0, finalPos.y);
+                    if (mixVal > 0.4) {
+                        vColor = mix(uColorMid, uColorTop, smoothstep(0.4, 1.2, mixVal));
+                    } else {
+                        vColor = mix(uColorBottom, uColorMid, smoothstep(0.0, 0.4, mixVal));
+                    }
+
+                    vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
+                    gl_PointSize = (3.5 * (1.0 + aRandom)) / -mvPosition.z;
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform float uMorphProgress;
+                uniform float uSolidProgress;
+                varying vec3 vColor;
+                varying vec3 vPos;
+                void main() {
+                    vec2 xy = gl_PointCoord.xy - vec2(0.5);
+                    if(length(xy) > 0.5) discard;
+                    float scanLine = mix(4.5, -4.5, uSolidProgress);
+                    float particleAlpha = 1.0 - smoothstep(scanLine - 0.3, scanLine + 0.3, vPos.y);
+                    if (particleAlpha <= 0.0) discard;
+                    float intensity = mix(1.8, 1.1, smoothstep(0.3, 1.0, uMorphProgress));
+                    gl_FragColor = vec4(vColor * intensity, smoothstep(0.5, 0.1, length(xy)) * particleAlpha); 
+                }
+            `,
+            transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+        });
+        const particleSystem = new THREE.Points(geometry, shaderMaterial);
+        mainGroup.add(particleSystem);
+
+        // --- 实体材质优化 ---
+        function createWadangTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024; canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#5a5248'; // 稍微明亮一点的底色
+            ctx.fillRect(0, 0, 1024, 1024);
+            for (let i = 0; i < 350000; i++) {
+                const x = Math.random() * 1024; const y = Math.random() * 1024;
+                ctx.fillStyle = Math.random() > 0.85 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.15)';
+                ctx.fillRect(x, y, 2, 2);
+            }
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const solidMaterial = new THREE.MeshStandardMaterial({
+            map: createWadangTexture(), 
+            roughness: 0.7, // 降低粗糙度，增加微弱高光，提升真实感
+            metalness: 0.2, // 增加一点质感强度
+            color: 0xD2C4B1, // 整体提亮基础色
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+
+        solidMaterial.onBeforeCompile = (shader) => {
+            shader.uniforms.uSolidProgress = { value: 0 };
+            shader.vertexShader = `varying vec3 vLocalPos;\n${shader.vertexShader}`.replace(`#include <begin_vertex>`, `#include <begin_vertex>\nvLocalPos = transformed;`);
+            shader.fragmentShader = `uniform float uSolidProgress; varying vec3 vLocalPos;\n${shader.fragmentShader}`.replace(
+                `#include <clipping_planes_fragment>`,
+                `#include <clipping_planes_fragment>
+                float scanLine = mix(4.5, -4.5, uSolidProgress);
+                float solidAlpha = smoothstep(scanLine - 0.3, scanLine + 0.3, vLocalPos.y);
+                if (solidAlpha <= 0.0) discard;
+                gl_FragColor.a *= solidAlpha;
+                float edge = abs(vLocalPos.y - scanLine);
+                if (edge < 0.25) {
+                    gl_FragColor.rgb += vec3(0.95, 0.8, 0.2) * (1.0 - edge/0.25) * 1.6;
+                }
+                `
+            );
+            solidMaterial.userData.shader = shader;
+        };
+
+        // --- 模型逻辑 ---
+        const objLoader = new OBJLoader();
+        function parseAndSampleOBJ(objText, callback) {
+            try {
+                const group = objLoader.parse(objText);
+                const geometries = [];
+                group.traverse((child) => {
+                    if (child.isMesh) {
+                        let geom = child.geometry.clone();
+                        geom.center();
+                        const scale = 2.8 / (geom.boundingSphere || (geom.computeBoundingSphere(), geom.boundingSphere)).radius;
+                        geom.scale(scale, scale, scale);
+                        geometries.push(geom);
+                    }
+                });
+                if (geometries.length === 0) return callback(false);
+                const mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries);
+                const sampler = new MeshSurfaceSampler(new THREE.Mesh(mergedGeometry)).build();
+                const targetPosArray = geometry.attributes.targetPosition.array;
+                const tempPos = new THREE.Vector3();
+
+                let currentIdx = 0;
+                const batchSize = 15000;
+                function processBatch() {
+                    const limit = Math.min(currentIdx + batchSize, PARTICLE_COUNT);
+                    for (; currentIdx < limit; currentIdx++) {
+                        sampler.sample(tempPos);
+                        targetPosArray[currentIdx * 3] = tempPos.x;
+                        targetPosArray[currentIdx * 3 + 1] = tempPos.y;
+                        targetPosArray[currentIdx * 3 + 2] = tempPos.z;
+                    }
+                    if (currentIdx < PARTICLE_COUNT) { requestAnimationFrame(processBatch); } else {
+                        geometry.attributes.targetPosition.needsUpdate = true;
+                        if (STATE.currentSolidMesh) mainGroup.remove(STATE.currentSolidMesh);
+                        mergedGeometry.computeVertexNormals();
+                        STATE.currentSolidMesh = new THREE.Mesh(mergedGeometry, solidMaterial);
+                        mainGroup.add(STATE.currentSolidMesh);
+                        callback(true);
+                    }
+                }
+                processBatch();
+            } catch (err) { callback(false); }
+        }
+
+        const fileUpload = document.getElementById('file-upload');
+        fileUpload.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length > 0) { STATE.files.push(...files); updateFileListUI(); if (STATE.currentIndex === -1) switchModelTo(0); }
+        });
+
+        function updateFileListUI() {
+            document.getElementById('file-count').innerText = `(${STATE.files.length})`;
+            const list = document.getElementById('file-list');
+            list.innerHTML = '';
+            STATE.files.forEach((file, index) => {
+                const li = document.createElement('li');
+                li.className = `px-3 py-2 rounded truncate transition-all duration-300 ${index === STATE.currentIndex ? 'bg-gold/20 text-white border border-gold/30' : 'text-gray-400 border border-transparent'}`;
+                li.innerText = file.name; list.appendChild(li);
+            });
+        }
+
+        async function switchModelTo(index) {
+            if (STATE.isMorphing) return;
+            STATE.currentIndex = index; updateFileListUI();
+            STATE.isSolidMode = false; STATE.solidMorphProgress = 0;
+            STATE.isMorphing = true;
+            await animateMorph(STATE.morphProgress, 0, 300);
+
+            const text = await STATE.files[index].text();
+            parseAndSampleOBJ(text, async (success) => {
+                if (success) {
+                    await animateMorph(0, 1, 1000);
+                    STATE.isMorphing = false;
+                    generateAICommentary(STATE.files[index].name);
+                    const panel = document.getElementById('ai-panel');
+                    panel.classList.remove('opacity-0', 'translate-x-12');
+                } else { STATE.isMorphing = false; }
+            });
+        }
+
+        function animateMorph(from, to, duration) {
+            return new Promise(resolve => {
+                const start = performance.now();
+                function update() {
+                    const t = Math.min((performance.now() - start) / duration, 1);
+                    STATE.morphProgress = from + (to - from) * (t < 0.5 ? 2*t*t : -1+(4-2*t)*t);
+                    if (t < 1) requestAnimationFrame(update); else resolve();
+                }
+                update();
+            });
+        }
+
+        function generateAICommentary(filename) {
+            const aiText = document.getElementById('ai-text');
+            const aiTitle = document.getElementById('ai-title');
+            const name = filename.replace(/\.[^/.]+$/, "");
+            aiTitle.innerText = name;
+            let content = `正在感应数字时空频率，解析【${name}】的历史信息。该瓦当承载着高句丽独特的审美与工艺，是研究古代边疆文明的重要数智档案。`;
+            for(let key in KNOWLEDGE_BASE) {
+                if(name.includes(key)) {
+                    content = KNOWLEDGE_BASE[key];
+                    break;
+                }
+            }
+            aiText.innerHTML = content;
+        }
+
+        // --- 手势追踪 ---
+        const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        
+        hands.onResults((results) => {
+            const canvas = document.getElementById('hands-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.save(); ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                document.getElementById('cam-status').className = 'w-1.5 h-1.5 rounded-full bg-green-500';
+                drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#FFD700', lineWidth: 2});
+                STATE.targetRotationY = -(landmarks[9].x - 0.5) * Math.PI * 2.5;
+                const pitch = (landmarks[9].y - landmarks[0].y) / Math.hypot(landmarks[9].x-landmarks[0].x, landmarks[9].y-landmarks[0].y);
+                STATE.targetRotationX = Math.max(0, Math.min((pitch + 0.4) * Math.PI * 1.2, Math.PI));
+                const pinch = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y);
+                STATE.targetScale = Math.max(0.6, Math.min(pinch * 5.0, 2.5));
+                const isFist = Math.hypot(landmarks[8].x - landmarks[0].x, landmarks[8].y - landmarks[0].y) < Math.hypot(landmarks[5].x - landmarks[0].x, landmarks[5].y - landmarks[0].y);
+                const deltaTime = (performance.now() - STATE.lastFrameTime) / 1000;
+                STATE.lastFrameTime = performance.now();
+                if (isFist) {
+                    if (!STATE.isCooldown && !STATE.isMorphing) {
+                        STATE.actionProgress += deltaTime / 1.0; 
+                        if (STATE.actionProgress >= 1) { 
+                            STATE.actionProgress = 0; STATE.isSolidMode = !STATE.isSolidMode;
+                            STATE.isCooldown = true; setTimeout(() => STATE.isCooldown = false, 800);
+                        }
+                    }
+                } else if (pinch < 0.04 && STATE.files.length > 1) {
+                    STATE.actionProgress += deltaTime / 1.5; 
+                    if (STATE.actionProgress >= 1) { STATE.actionProgress = 0; switchModelTo((STATE.currentIndex + 1) % STATE.files.length); }
+                } else { STATE.actionProgress = Math.max(0, STATE.actionProgress - deltaTime * 3); }
+                document.getElementById('progress-ring').style.strokeDashoffset = 282.7 * (1 - Math.min(STATE.actionProgress, 1));
+            } else { document.getElementById('cam-status').className = 'w-1.5 h-1.5 rounded-full bg-red-500'; }
+            ctx.restore();
+        });
+
+        document.getElementById('start-cam-overlay').addEventListener('click', () => {
+            document.getElementById('start-cam-overlay').style.display = 'none';
+            document.getElementById('hands-canvas').classList.remove('opacity-0');
+            new Camera(document.getElementById('video-input'), { onFrame: async () => await hands.send({image: document.getElementById('video-input')}), width: 320, height: 180 }).start();
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now() / 1000;
+            shaderMaterial.uniforms.uTime.value = time;
+            shaderMaterial.uniforms.uMorphProgress.value = STATE.morphProgress;
+            STATE.solidMorphProgress = THREE.MathUtils.lerp(STATE.solidMorphProgress, STATE.isSolidMode ? 1 : 0, 0.04);
+            shaderMaterial.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
+            if (solidMaterial.userData.shader) solidMaterial.userData.shader.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
+            STATE.currentRotationY = THREE.MathUtils.lerp(STATE.currentRotationY, STATE.targetRotationY, 0.08);
+            STATE.currentRotationX = THREE.MathUtils.lerp(STATE.currentRotationX, STATE.targetRotationX, 0.08);
+            STATE.currentScale = THREE.MathUtils.lerp(STATE.currentScale, STATE.targetScale, 0.1);
+            mainGroup.rotation.set(STATE.currentRotationX, STATE.currentRotationY, 0);
+            mainGroup.scale.setScalar(STATE.currentScale);
+            mainGroup.position.y = Math.sin(time * 0.5) * 0.1;
+            composer.render();
+        }
+        animate();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
