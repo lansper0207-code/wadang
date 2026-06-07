@@ -60,7 +60,14 @@
         <p class="text-[11px] md:text-xs text-white/60 font-light tracking-[0.35em] uppercase mb-4">
             Goguryeo Wadang Digital Gesture Interaction
         </p>
-        <div class="w-56 h-[1px] bg-gradient-to-r from-gold/50 to-transparent"></div>
+        <div class="w-56 h-[1px] bg-gradient-to-r from-gold/50 to-transparent mb-6"></div>
+
+        <button id="backToUnityBtn" class="pointer-events-auto px-5 py-2.5 glass-panel rounded-lg text-xs tracking-widest text-white/80 hover:text-gold hover:border-gold/50 hover:bg-white/10 transition-all duration-300 flex items-center gap-2 backdrop-blur-md">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            完成手势，返回
+        </button>
     </div>
 
     <!-- Collapsible Upload Panel -->
@@ -129,7 +136,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
             </svg>
             <span class="text-[10px] tracking-widest text-white/70 font-light block mb-1">点击开启手势交互</span>
-            <span class="text-[9px] tracking-wider text-gray-500 font-light block px-2">OK手势(1.5秒):切换 | 握拳(1秒):虚实转换</span>
+            <span class="text-[9px] tracking-wider text-gray-500 font-light block px-2">OK(1.5秒)/长按屏幕:切换 | 握拳/双击屏幕:虚实转换</span>
         </div>
 
         <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -180,7 +187,22 @@
             actionProgress: 0, 
             isCooldown: false,
             lastFrameTime: performance.now(),
-            isPanelFolded: false
+            isPanelFolded: false,
+            // 鼠标/触摸增量控制
+            mouse: {
+                isDragging: false,
+                previousX: 0,
+                previousY: 0,
+                targetX: 0,
+                targetY: 0,
+                currentX: 0,
+                currentY: 0,
+                // 长按切换属性
+                longPressTimer: null,
+                isLongPressCanceled: false,
+                startX: 0,
+                startY: 0
+            }
         };
 
         const KNOWLEDGE_BASE = {
@@ -220,12 +242,11 @@
         container.appendChild(renderer.domElement);
 
         // --- 光影增强方案 ---
-        scene.add(new THREE.AmbientLight(0xffffff, 0.75)); // 增强基础环境亮度
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1.4); // 增强主光强度
+        scene.add(new THREE.AmbientLight(0xffffff, 0.75)); 
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.4); 
         dirLight.position.set(5, 5, 5);
         scene.add(dirLight);
 
-        // 新增补光光源，增加侧影层次感
         const pointLight = new THREE.PointLight(0xffffff, 0.8);
         pointLight.position.set(-5, 3, 2);
         scene.add(pointLight);
@@ -239,10 +260,149 @@
         const mainGroup = new THREE.Group();
         scene.add(mainGroup);
 
-        // --- 粒子系统 ---
+        // --- 鼠标/触摸/捏合/长按事件注册 ---
+        const initDragAndZoomControls = () => {
+            let initialPinchDistance = 0;
+            let initialScale = STATE.targetScale;
+            let lastTapTime = 0; // 记录移动端触屏上一次点击时间，用于判定双击
+
+            // 长按核心逻辑处理函数：按下开始计时
+            const startLongPressTimer = (clientX, clientY) => {
+                STATE.mouse.startX = clientX;
+                STATE.mouse.startY = clientY;
+                STATE.mouse.isLongPressCanceled = false;
+                
+                clearTimeout(STATE.mouse.longPressTimer);
+                STATE.mouse.longPressTimer = setTimeout(() => {
+                    // 如果中途未被滑动或双指操作取消，并且模型队列大于1，非变形过程中，触发模型切换
+                    if (!STATE.mouse.isLongPressCanceled && STATE.files.length > 1 && !STATE.isMorphing) {
+                        const nextIndex = (STATE.currentIndex + 1) % STATE.files.length;
+                        switchModelTo(nextIndex);
+                        // 移动端震动反馈（如果硬件支持）
+                        if (navigator.vibrate) {
+                            navigator.vibrate(50);
+                        }
+                    }
+                }, 800); // 800ms 触发长按
+            };
+
+            // 滑动过大自动取消长按判定
+            const checkCancelLongPress = (clientX, clientY) => {
+                const dist = Math.hypot(clientX - STATE.mouse.startX, clientY - STATE.mouse.startY);
+                if (dist > 10) { // 移动位移大于10像素则取消长按，判定为旋转手势
+                    STATE.mouse.isLongPressCanceled = true;
+                    clearTimeout(STATE.mouse.longPressTimer);
+                }
+            };
+
+            const cancelLongPress = () => {
+                STATE.mouse.isLongPressCanceled = true;
+                clearTimeout(STATE.mouse.longPressTimer);
+            };
+
+            const onPointerDown = (clientX, clientY) => {
+                STATE.mouse.isDragging = true;
+                STATE.mouse.previousX = clientX;
+                STATE.mouse.previousY = clientY;
+                startLongPressTimer(clientX, clientY);
+            };
+
+            const onPointerMove = (clientX, clientY) => {
+                checkCancelLongPress(clientX, clientY);
+                if (!STATE.mouse.isDragging) return;
+                
+                const deltaX = clientX - STATE.mouse.previousX;
+                const deltaY = clientY - STATE.mouse.previousY;
+
+                // 旋转敏感度阻尼
+                STATE.mouse.targetY += deltaX * 0.006;
+                STATE.mouse.targetX += deltaY * 0.006;
+
+                // 限制X轴旋转范围，防止模型翻转过度
+                STATE.mouse.targetX = Math.max(-Math.PI * 0.4, Math.min(Math.PI * 0.4, STATE.mouse.targetX));
+
+                STATE.mouse.previousX = clientX;
+                STATE.mouse.previousY = clientY;
+            };
+
+            const onPointerUp = () => {
+                STATE.mouse.isDragging = false;
+                cancelLongPress();
+            };
+
+            // 鼠标拖拽 & 长按切换
+            container.addEventListener('mousedown', (e) => onPointerDown(e.clientX, e.clientY));
+            window.addEventListener('mousemove', (e) => onPointerMove(e.clientX, e.clientY));
+            window.addEventListener('mouseup', onPointerUp);
+
+            // PC 端快速双击，切换虚实混合模式
+            container.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                STATE.isSolidMode = !STATE.isSolidMode;
+            });
+
+            // 鼠标滚轮缩放 (带有阈值限制，防止过大过小)
+            container.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const zoomSpeed = 0.0012;
+                STATE.targetScale -= e.deltaY * zoomSpeed;
+                STATE.targetScale = Math.max(0.4, Math.min(STATE.targetScale, 3.0));
+            }, { passive: false });
+
+            // 触摸事件适配移动端（支持单指拖拽旋转、双指捏合缩放、双击虚实切换、单指长按切换模型）
+            container.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    const now = performance.now();
+                    const deltaTap = now - lastTapTime;
+                    
+                    // 双击逻辑判定（间隔小于 300 毫秒视为双击切换虚实）
+                    if (deltaTap < 300 && deltaTap > 0) {
+                        STATE.isSolidMode = !STATE.isSolidMode;
+                        lastTapTime = 0; // 重置
+                        cancelLongPress(); // 双击不触发长按
+                    } else {
+                        lastTapTime = now;
+                        onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+                    }
+                    initialPinchDistance = 0; // 重置捏合起点
+                } else if (e.touches.length === 2) {
+                    // 进入双指缩放模式
+                    STATE.mouse.isDragging = false; // 终止单指拖拽，避免抖动旋转
+                    cancelLongPress(); // 双指操作立即取消长按
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    initialPinchDistance = Math.hypot(dx, dy);
+                    initialScale = STATE.targetScale;
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 1) {
+                    onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+                } else if (e.touches.length === 2 && initialPinchDistance > 0) {
+                    // 双指捏合放大缩小逻辑
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    const currentDistance = Math.hypot(dx, dy);
+                    const factor = currentDistance / initialPinchDistance;
+                    STATE.targetScale = Math.max(0.4, Math.min(initialScale * factor, 3.0));
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchend', (e) => {
+                if (e.touches.length < 2) {
+                    initialPinchDistance = 0;
+                }
+                onPointerUp();
+            });
+        };
+        initDragAndZoomControls();
+
+        // --- 粒子系统设置与重构 ---
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(PARTICLE_COUNT * 3);
         const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+        const targetNormals = new Float32Array(PARTICLE_COUNT * 3); // 法线属性数组来记录模型各点朝向
         const randoms = new Float32Array(PARTICLE_COUNT);
 
         for (let i = 0; i < PARTICLE_COUNT; i++) {
@@ -255,10 +415,14 @@
             targetPositions[i * 3] = positions[i * 3];
             targetPositions[i * 3 + 1] = positions[i * 3 + 1];
             targetPositions[i * 3 + 2] = positions[i * 3 + 2];
+            targetNormals[i * 3] = 0;
+            targetNormals[i * 3 + 1] = 1;
+            targetNormals[i * 3 + 2] = 0;
             randoms[i] = Math.random();
         }
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('targetPosition', new THREE.BufferAttribute(targetPositions, 3));
+        geometry.setAttribute('targetNormal', new THREE.BufferAttribute(targetNormals, 3)); // 注册法线属性
         geometry.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
 
         const shaderMaterial = new THREE.ShaderMaterial({
@@ -273,23 +437,46 @@
             vertexShader: `
                 uniform float uTime;
                 uniform float uMorphProgress;
+                uniform float uSolidProgress;
                 attribute vec3 targetPosition;
+                attribute vec3 targetNormal;
                 attribute float aRandom;
                 varying vec3 vColor;
                 varying vec3 vPos;
+                varying float vShading;
                 uniform vec3 uColorTop;
                 uniform vec3 uColorMid;
                 uniform vec3 uColorBottom;
 
                 void main() {
                     vec3 chaosPos = position;
+                    // 混沌状态下的粒子扰动
                     chaosPos.x += sin(uTime * 0.5 + aRandom * 10.0) * 0.2;
                     chaosPos.y += cos(uTime * 0.6 + aRandom * 10.0) * 0.2;
                     chaosPos.z += sin(uTime * 0.4 + aRandom * 10.0) * 0.2;
+                    
                     float easeProgress = smoothstep(0.0, 1.0, uMorphProgress);
-                    vec3 finalPos = mix(chaosPos, targetPosition, easeProgress);
+                    vec3 morphedPos = mix(chaosPos, targetPosition, easeProgress);
+
+                    // 引入流体呼吸波动效果（沿着法线做细微的波浪扰动，保证瓦当起伏细节极其灵动）
+                    float wave = sin(uTime * 1.8 + morphedPos.y * 3.5 + aRandom * 6.28) * 0.025 * easeProgress * (1.0 - uSolidProgress);
+                    vec3 finalPos = morphedPos + targetNormal * wave;
                     vPos = finalPos;
 
+                    // 三维光影计算：模拟右上侧展厅光源照射到瓦当低浮雕表面的漫反射与镜面反射
+                    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
+                    float diff = max(dot(targetNormal, lightDir), 0.0);
+                    
+                    // 镜面高光，突显瓦当雕刻的锐利边缘
+                    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+                    vec3 halfDir = normalize(lightDir + viewDir);
+                    float spec = pow(max(dot(targetNormal, halfDir), 0.0), 8.0) * 0.4;
+                    
+                    float ambient = 0.25;
+                    float shading = ambient + diff * 0.75 + spec;
+                    vShading = mix(1.0, shading, easeProgress);
+
+                    // 空间高度插值配色
                     float mixVal = smoothstep(-2.0, 2.0, finalPos.y);
                     if (mixVal > 0.4) {
                         vColor = mix(uColorMid, uColorTop, smoothstep(0.4, 1.2, mixVal));
@@ -298,7 +485,11 @@
                     }
 
                     vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
-                    gl_PointSize = (3.5 * (1.0 + aRandom)) / -mvPosition.z;
+                    
+                    // 粒子尺寸自适应阴影：背光处的粒子自动缩小形成微观阴影效果，受光处稍微变大，极大地强化低浮雕细节！
+                    float sizeShadingFactor = mix(0.4, 1.25, diff);
+                    float pointSizeBase = 4.0;
+                    gl_PointSize = (pointSizeBase * (0.8 + aRandom * 0.4) * sizeShadingFactor) / -mvPosition.z;
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `,
@@ -307,14 +498,24 @@
                 uniform float uSolidProgress;
                 varying vec3 vColor;
                 varying vec3 vPos;
+                varying float vShading;
+
                 void main() {
                     vec2 xy = gl_PointCoord.xy - vec2(0.5);
-                    if(length(xy) > 0.5) discard;
+                    float dist = length(xy);
+                    if(dist > 0.5) discard;
+                    
+                    // 高精密带亮核的平滑星光粒子
+                    float particleAlpha = smoothstep(0.5, 0.05, dist);
+                    
                     float scanLine = mix(4.5, -4.5, uSolidProgress);
-                    float particleAlpha = 1.0 - smoothstep(scanLine - 0.3, scanLine + 0.3, vPos.y);
-                    if (particleAlpha <= 0.0) discard;
-                    float intensity = mix(1.8, 1.1, smoothstep(0.3, 1.0, uMorphProgress));
-                    gl_FragColor = vec4(vColor * intensity, smoothstep(0.5, 0.1, length(xy)) * particleAlpha); 
+                    float solidAlphaFactor = 1.0 - smoothstep(scanLine - 0.3, scanLine + 0.3, vPos.y);
+                    if (solidAlphaFactor <= 0.0) discard;
+                    
+                    float intensity = mix(1.8, 1.15, smoothstep(0.3, 1.0, uMorphProgress));
+                    
+                    // 结合顶点着色器传过来的法线光影强度渲染粒子，实现细腻的三维浮雕质感
+                    gl_FragColor = vec4(vColor * intensity * vShading, particleAlpha * solidAlphaFactor); 
                 }
             `,
             transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
@@ -327,7 +528,7 @@
             const canvas = document.createElement('canvas');
             canvas.width = 1024; canvas.height = 1024;
             const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#5a5248'; // 稍微明亮一点的底色
+            ctx.fillStyle = '#5a5248'; 
             ctx.fillRect(0, 0, 1024, 1024);
             for (let i = 0; i < 350000; i++) {
                 const x = Math.random() * 1024; const y = Math.random() * 1024;
@@ -339,9 +540,9 @@
 
         const solidMaterial = new THREE.MeshStandardMaterial({
             map: createWadangTexture(), 
-            roughness: 0.7, // 降低粗糙度，增加微弱高光，提升真实感
-            metalness: 0.2, // 增加一点质感强度
-            color: 0xD2C4B1, // 整体提亮基础色
+            roughness: 0.7, 
+            metalness: 0.2, 
+            color: 0xD2C4B1, 
             transparent: true,
             side: THREE.DoubleSide
         });
@@ -375,7 +576,8 @@
                     if (child.isMesh) {
                         let geom = child.geometry.clone();
                         geom.center();
-                        const scale = 2.8 / (geom.boundingSphere || (geom.computeBoundingSphere(), geom.boundingSphere)).radius;
+                        // 初始缩放比例由 2.8 调整为 1.6，使模型加载初始占屏幕比例更小、更精致
+                        const scale = 1.6 / (geom.boundingSphere || (geom.computeBoundingSphere(), geom.boundingSphere)).radius;
                         geom.scale(scale, scale, scale);
                         geometries.push(geom);
                     }
@@ -384,20 +586,26 @@
                 const mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries);
                 const sampler = new MeshSurfaceSampler(new THREE.Mesh(mergedGeometry)).build();
                 const targetPosArray = geometry.attributes.targetPosition.array;
+                const targetNormalArray = geometry.attributes.targetNormal.array; // 获取粒子法线属性映射
                 const tempPos = new THREE.Vector3();
+                const tempNormal = new THREE.Vector3(); // 临时存储法线数据
 
                 let currentIdx = 0;
                 const batchSize = 15000;
                 function processBatch() {
                     const limit = Math.min(currentIdx + batchSize, PARTICLE_COUNT);
                     for (; currentIdx < limit; currentIdx++) {
-                        sampler.sample(tempPos);
+                        sampler.sample(tempPos, tempNormal); // 同时高精密采样点的位置与法线方向
                         targetPosArray[currentIdx * 3] = tempPos.x;
                         targetPosArray[currentIdx * 3 + 1] = tempPos.y;
                         targetPosArray[currentIdx * 3 + 2] = tempPos.z;
+                        targetNormalArray[currentIdx * 3] = tempNormal.x; // 保存法线到GPU缓冲
+                        targetNormalArray[currentIdx * 3 + 1] = tempNormal.y;
+                        targetNormalArray[currentIdx * 3 + 2] = tempNormal.z;
                     }
                     if (currentIdx < PARTICLE_COUNT) { requestAnimationFrame(processBatch); } else {
                         geometry.attributes.targetPosition.needsUpdate = true;
+                        geometry.attributes.targetNormal.needsUpdate = true; // 刷新GPU渲染管线法线缓冲
                         if (STATE.currentSolidMesh) mainGroup.remove(STATE.currentSolidMesh);
                         mergedGeometry.computeVertexNormals();
                         STATE.currentSolidMesh = new THREE.Mesh(mergedGeometry, solidMaterial);
@@ -415,6 +623,7 @@
             if (files.length > 0) { STATE.files.push(...files); updateFileListUI(); if (STATE.currentIndex === -1) switchModelTo(0); }
         });
 
+        // 更新上传模型队列列表UI
         function updateFileListUI() {
             document.getElementById('file-count').innerText = `(${STATE.files.length})`;
             const list = document.getElementById('file-list');
@@ -426,6 +635,7 @@
             });
         }
 
+        // 切换加载3D OBJ文物模型
         async function switchModelTo(index) {
             if (STATE.isMorphing) return;
             STATE.currentIndex = index; updateFileListUI();
@@ -437,106 +647,211 @@
             parseAndSampleOBJ(text, async (success) => {
                 if (success) {
                     await animateMorph(0, 1, 1000);
+                    showAICard(STATE.files[index].name);
+                } else {
                     STATE.isMorphing = false;
-                    generateAICommentary(STATE.files[index].name);
-                    const panel = document.getElementById('ai-panel');
-                    panel.classList.remove('opacity-0', 'translate-x-12');
-                } else { STATE.isMorphing = false; }
+                }
             });
         }
 
+        // 属性变动过渡效果核心逻辑
         function animateMorph(from, to, duration) {
-            return new Promise(resolve => {
-                const start = performance.now();
+            return new Promise((resolve) => {
+                const startTime = performance.now();
                 function update() {
-                    const t = Math.min((performance.now() - start) / duration, 1);
-                    STATE.morphProgress = from + (to - from) * (t < 0.5 ? 2*t*t : -1+(4-2*t)*t);
-                    if (t < 1) requestAnimationFrame(update); else resolve();
+                    const elapsed = performance.now() - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    STATE.morphProgress = from + (to - from) * progress;
+                    if (progress < 1) {
+                        requestAnimationFrame(update);
+                    } else {
+                        STATE.isMorphing = false;
+                        resolve();
+                    }
                 }
-                update();
+                requestAnimationFrame(update);
             });
         }
 
-        function generateAICommentary(filename) {
-            const aiText = document.getElementById('ai-text');
+        // 展示AI文物知识库
+        function showAICard(filename) {
+            const aiPanel = document.getElementById('ai-panel');
             const aiTitle = document.getElementById('ai-title');
-            const name = filename.replace(/\.[^/.]+$/, "");
-            aiTitle.innerText = name;
-            let content = `正在感应数字时空频率，解析【${name}】的历史信息。该瓦当承载着高句丽独特的审美与工艺，是研究古代边疆文明的重要数智档案。`;
-            for(let key in KNOWLEDGE_BASE) {
-                if(name.includes(key)) {
-                    content = KNOWLEDGE_BASE[key];
-                    break;
-                }
-            }
-            aiText.innerHTML = content;
+            const aiText = document.getElementById('ai-text');
+            const cleanName = filename.replace(/\.[^/.]+$/, "");
+            aiTitle.innerText = cleanName;
+            aiText.innerHTML = KNOWLEDGE_BASE[cleanName] || "解析出独特的纹样数据：这是高句丽古风时期艺术品的珍贵遗留。精妙的线条起伏生动展示了当时的工匠技艺，蕴含着浓郁的地方特色与文化价值。";
+            aiPanel.style.opacity = '1';
+            aiPanel.style.transform = 'translateX(0)';
         }
 
-        // --- 手势追踪 ---
-        const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
-        
-        hands.onResults((results) => {
-            const canvas = document.getElementById('hands-canvas');
-            const ctx = canvas.getContext('2d');
-            ctx.save(); ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0];
-                document.getElementById('cam-status').className = 'w-1.5 h-1.5 rounded-full bg-green-500';
-                drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#FFD700', lineWidth: 2});
-                STATE.targetRotationY = -(landmarks[9].x - 0.5) * Math.PI * 2.5;
-                const pitch = (landmarks[9].y - landmarks[0].y) / Math.hypot(landmarks[9].x-landmarks[0].x, landmarks[9].y-landmarks[0].y);
-                STATE.targetRotationX = Math.max(0, Math.min((pitch + 0.4) * Math.PI * 1.2, Math.PI));
-                const pinch = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y);
-                STATE.targetScale = Math.max(0.6, Math.min(pinch * 5.0, 2.5));
-                const isFist = Math.hypot(landmarks[8].x - landmarks[0].x, landmarks[8].y - landmarks[0].y) < Math.hypot(landmarks[5].x - landmarks[0].x, landmarks[5].y - landmarks[0].y);
-                const deltaTime = (performance.now() - STATE.lastFrameTime) / 1000;
-                STATE.lastFrameTime = performance.now();
-                if (isFist) {
-                    if (!STATE.isCooldown && !STATE.isMorphing) {
-                        STATE.actionProgress += deltaTime / 1.0; 
-                        if (STATE.actionProgress >= 1) { 
-                            STATE.actionProgress = 0; STATE.isSolidMode = !STATE.isSolidMode;
-                            STATE.isCooldown = true; setTimeout(() => STATE.isCooldown = false, 800);
-                        }
-                    }
-                } else if (pinch < 0.04 && STATE.files.length > 1) {
-                    STATE.actionProgress += deltaTime / 1.5; 
-                    if (STATE.actionProgress >= 1) { STATE.actionProgress = 0; switchModelTo((STATE.currentIndex + 1) % STATE.files.length); }
-                } else { STATE.actionProgress = Math.max(0, STATE.actionProgress - deltaTime * 3); }
-                document.getElementById('progress-ring').style.strokeDashoffset = 282.7 * (1 - Math.min(STATE.actionProgress, 1));
-            } else { document.getElementById('cam-status').className = 'w-1.5 h-1.5 rounded-full bg-red-500'; }
-            ctx.restore();
+        // --- 手势识别设置 ---
+        let mediaPipeHands = null;
+        let cameraUtilsInstance = null;
+        const startCamOverlay = document.getElementById('start-cam-overlay');
+        const progressRing = document.getElementById('progress-ring');
+        const camStatus = document.getElementById('cam-status');
+        const camStatusText = document.getElementById('cam-status-text');
+
+        startCamOverlay.addEventListener('click', () => {
+            startCamOverlay.classList.add('hidden');
+            initHandTracking();
         });
 
-        document.getElementById('start-cam-overlay').addEventListener('click', () => {
-            document.getElementById('start-cam-overlay').style.display = 'none';
-            document.getElementById('hands-canvas').classList.remove('opacity-0');
-            new Camera(document.getElementById('video-input'), { onFrame: async () => await hands.send({image: document.getElementById('video-input')}), width: 320, height: 180 }).start();
-        });
+        function setRingProgress(percentage) {
+            const circumference = 2 * Math.PI * 45;
+            const offset = circumference - (percentage / 100) * circumference;
+            progressRing.style.strokeDashoffset = offset;
+        }
 
+        async function initHandTracking() {
+            camStatus.className = 'w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse';
+            camStatusText.innerText = '正在调起相机...';
+            const videoElement = document.getElementById('video-input');
+            const handsCanvas = document.getElementById('hands-canvas');
+            const canvasCtx = handsCanvas.getContext('2d');
+
+            mediaPipeHands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            mediaPipeHands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.75,
+                minTrackingConfidence: 0.7
+            });
+
+            mediaPipeHands.onResults((results) => {
+                if (handsCanvas.style.opacity === '0') handsCanvas.style.opacity = '1';
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, handsCanvas.width, handsCanvas.height);
+                canvasCtx.drawImage(results.image, 0, 0, handsCanvas.width, handsCanvas.height);
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    camStatus.className = 'w-1.5 h-1.5 rounded-full bg-green-500';
+                    camStatusText.innerText = '完美追踪中';
+                    drawConnectors(canvasCtx, results.multiHandLandmarks[0], HAND_CONNECTIONS, {color: '#FFD700', lineWidth: 2});
+                    drawLandmarks(canvasCtx, results.multiHandLandmarks[0], {color: '#FFFFFF', lineWidth: 1, radius: 2});
+                    processGesture(results.multiHandLandmarks[0]);
+                } else {
+                    camStatus.className = 'w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse';
+                    camStatusText.innerText = '未检测到手势';
+                    setRingProgress(0);
+                    STATE.actionProgress = 0;
+                }
+                canvasCtx.restore();
+            });
+
+            cameraUtilsInstance = new Camera(videoElement, {
+                onFrame: async () => {
+                    await mediaPipeHands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+            cameraUtilsInstance.start().catch(() => {
+                camStatus.className = 'w-1.5 h-1.5 rounded-full bg-red-600';
+                camStatusText.innerText = '获取摄像头失败';
+            });
+        }
+
+        // 识别手掌关键点动作
+        function processGesture(landmarks) {
+            if (STATE.isCooldown) return;
+
+            const getDist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y, p1.z - p2.z);
+            const isFingerExtended = (tip, pip, mcp) => tip.y < pip.y && pip.y < mcp.y;
+
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // 测算OK手势：食指捏紧大拇指，其余三指舒展张开
+            const isOkGesture = getDist(thumbTip, indexTip) < 0.055 && 
+                               isFingerExtended(middleTip, landmarks[10], landmarks[9]) &&
+                               isFingerExtended(ringTip, landmarks[14], landmarks[13]) &&
+                               isFingerExtended(pinkyTip, landmarks[18], landmarks[17]);
+
+            // 测算握拳手势：所有手指闭合折叠
+            const isFistGesture = middleTip.y > landmarks[9].y &&
+                                 ringTip.y > landmarks[13].y &&
+                                 pinkyTip.y > landmarks[17].y &&
+                                 indexTip.y > landmarks[5].y;
+
+            if (isOkGesture && STATE.files.length > 1 && !STATE.isMorphing) {
+                STATE.actionProgress += 3.5; // 大约耗时1秒
+                setRingProgress(Math.min(STATE.actionProgress, 100));
+                if (STATE.actionProgress >= 100) {
+                    triggerCooldown();
+                    const nextIndex = (STATE.currentIndex + 1) % STATE.files.length;
+                    switchModelTo(nextIndex);
+                }
+            } else if (isFistGesture && !STATE.isMorphing) {
+                STATE.actionProgress += 4.5;
+                setRingProgress(Math.min(STATE.actionProgress, 100));
+                if (STATE.actionProgress >= 100) {
+                    triggerCooldown();
+                    STATE.isSolidMode = !STATE.isSolidMode;
+                }
+            } else {
+                STATE.actionProgress = Math.max(0, STATE.actionProgress - 5);
+                setRingProgress(STATE.actionProgress);
+            }
+        }
+
+        // 设置冷却时间
+        function triggerCooldown() {
+            STATE.isCooldown = true; STATE.actionProgress = 0; setRingProgress(0);
+            setTimeout(() => { STATE.isCooldown = false; }, 1200);
+        }
+
+        // --- 核心渲染循环 ---
         function animate() {
             requestAnimationFrame(animate);
-            const time = performance.now() / 1000;
-            shaderMaterial.uniforms.uTime.value = time;
-            shaderMaterial.uniforms.uMorphProgress.value = STATE.morphProgress;
-            STATE.solidMorphProgress = THREE.MathUtils.lerp(STATE.solidMorphProgress, STATE.isSolidMode ? 1 : 0, 0.04);
-            shaderMaterial.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
-            if (solidMaterial.userData.shader) solidMaterial.userData.shader.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
-            STATE.currentRotationY = THREE.MathUtils.lerp(STATE.currentRotationY, STATE.targetRotationY, 0.08);
-            STATE.currentRotationX = THREE.MathUtils.lerp(STATE.currentRotationX, STATE.targetRotationX, 0.08);
-            STATE.currentScale = THREE.MathUtils.lerp(STATE.currentScale, STATE.targetScale, 0.1);
-            mainGroup.rotation.set(STATE.currentRotationX, STATE.currentRotationY, 0);
+            const now = performance.now();
+            const delta = (now - STATE.lastFrameTime) / 1000;
+            STATE.lastFrameTime = now;
+
+            shaderMaterial.uniforms.uTime.value = now * 0.001;
+
+            // 顺滑旋转阻尼平滑过渡
+            STATE.currentRotationY += (STATE.mouse.targetY - STATE.currentRotationY) * 0.08;
+            STATE.currentRotationX += (STATE.mouse.targetX - STATE.currentRotationX) * 0.08;
+            
+            mainGroup.rotation.y = STATE.currentRotationY;
+            mainGroup.rotation.x = STATE.currentRotationX;
+
+            // 顺滑比例阻尼过渡
+            STATE.currentScale += (STATE.targetScale - STATE.currentScale) * 0.1;
             mainGroup.scale.setScalar(STATE.currentScale);
-            mainGroup.position.y = Math.sin(time * 0.5) * 0.1;
+
+            // 控制粒子和实体的平滑虚实扫描过渡动画
+            const targetSolidProgress = STATE.isSolidMode ? 1 : 0;
+            STATE.solidMorphProgress += (targetSolidProgress - STATE.solidMorphProgress) * 0.05;
+            
+            shaderMaterial.uniforms.uMorphProgress.value = STATE.morphProgress;
+            shaderMaterial.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
+            
+            if (solidMaterial.userData.shader) {
+                solidMaterial.userData.shader.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
+            }
+
             composer.render();
         }
-        animate();
+
+        // --- 自适应排版 ---
         window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
         });
+
+        // 默认模型初始化加载（由于这里不带有预置多媒体文件，所以由用户自行上传 OBJ 开始运行）
+        updateFileListUI();
+        animate();
     </script>
 </body>
 </html>
