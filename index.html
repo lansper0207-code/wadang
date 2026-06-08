@@ -18,7 +18,7 @@
         }
     </script>
     <style>
-        body { background-color: #000000; overflow: hidden; margin: 0; user-select: none; }
+        body { background-color: #000000; overflow: hidden; margin: 0; user-select: none; touch-action: none; }
         .glass-panel {
             background: rgba(255, 255, 255, 0.03);
             backdrop-filter: blur(20px);
@@ -136,7 +136,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
             </svg>
             <span class="text-[10px] tracking-widest text-white/70 font-light block mb-1">点击开启手势交互</span>
-            <span class="text-[9px] tracking-wider text-gray-500 font-light block px-2">OK(1.5秒)/长按屏幕:切换 | 握拳/双击屏幕:虚实转换</span>
+            <span class="text-[9px] tracking-wider text-gray-500 font-light block px-2">手势(OK/握拳) 或 鼠标/触屏(拖拽旋转/滚轮/双击/长按)</span>
         </div>
 
         <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -172,7 +172,7 @@
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
         // --- 全局状态 ---
-        const PARTICLE_COUNT = 200000;
+        const PARTICLE_COUNT = 300000;
         const STATE = {
             files: [], 
             currentIndex: -1, 
@@ -187,27 +187,50 @@
             actionProgress: 0, 
             isCooldown: false,
             lastFrameTime: performance.now(),
-            isPanelFolded: false,
-            // 鼠标/触摸增量控制
-            mouse: {
-                isDragging: false,
-                previousX: 0,
-                previousY: 0,
-                targetX: 0,
-                targetY: 0,
-                currentX: 0,
-                currentY: 0,
-                // 长按切换属性
-                longPressTimer: null,
-                isLongPressCanceled: false,
-                startX: 0,
-                startY: 0
-            }
+            isPanelFolded: false
         };
 
         const KNOWLEDGE_BASE = {
-            "兽面纹": "兽面纹瓦当的数量在高句丽时期仅次于莲花纹瓦当。兽面纹瓦当多是与中原文化中的兽纹与饕餮纹演化而来的。高句丽受其影响注入了东北地区东北虎的形象。从而形成了高句丽人典型的兽面纹饰题材。<br><br>兽面纹的形成也是一种对强者的崇拜，寓意着强大，力量，牢固与邪祟不得靠近的庄严形象。"
+            "兽面纹": "兽面纹瓦当的数量在高句丽时期仅次于莲花纹瓦当。兽面纹瓦当多是与中原文化中的兽纹与饕餮纹演化而来的。高句丽受其影响注入了东北地区东北虎的形象。从而形成了高句丽人典型的兽面纹饰题材。<br><br>兽面纹的形成也是一种对强者的崇拜，寓意着强大，力量，牢固与邪祟不得靠近的庄严形象。",
+            "莲花纹": "莲花纹瓦当是高句丽时期出土数量最多、分布最广的瓦当。佛教的传入对高句丽的文化艺术产生了深远影响，莲花出淤泥而不染的特质契合了当时的宗教信仰与审美。",
+            "卷云纹": "卷云纹瓦当线条流畅，气韵生动，象征着天空、云彩以及高升的祥瑞之气，体现了古人对自然天象的敬畏与浪漫的艺术加工。",
+            "忍冬纹": "忍冬纹瓦当图案源于忍冬植物，寓意延年益寿、长久不衰。这种纹饰随佛教传入，后经过本土化融合，成为极具时代特色的装饰图案。"
         };
+
+        // --- 核心预存逻辑：懒加载伪装模型库 ---
+        const PRELOAD_MODELS = [
+            { name: "兽面纹瓦当.obj", path: "models/shoumian_wadang.obj" },
+            { name: "莲花纹瓦当.obj", path: "models/lianhua_wadang.obj" },
+            { name: "卷云纹瓦当.obj", path: "models/juanyun_wadang.obj" },
+            { name: "忍冬纹瓦当.obj", path: "models/rendong_wadang.obj" }
+        ];
+
+        function initPreloadModels() {
+            PRELOAD_MODELS.forEach(item => {
+                STATE.files.push({
+                    name: item.name,
+                    // 【懒加载核心】只有在真正被选中（调用 .text()）时，才去网络请求 obj 数据
+                    text: async () => {
+                        try {
+                            const response = await fetch(item.path);
+                            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                            return await response.text();
+                        } catch (error) {
+                            console.error(`无法加载预存模型 [${item.name}]，请确认 models 文件夹及其路径是否正确:`, error);
+                            // 若加载失败，返回一个极简的立方体防止程序崩溃
+                            return "v -1 -1 1\nv 1 -1 1\nv -1 1 1\nv 1 1 1\nv -1 -1 -1\nv 1 -1 -1\nv -1 1 -1\nv 1 1 -1\nf 1 2 4 3\nf 3 4 8 7\nf 7 8 6 5\nf 5 6 2 1\nf 3 7 5 1\nf 2 6 8 4";
+                        }
+                    }
+                });
+            });
+
+            // 预存完成后，刷新右侧列表UI，并自动加载队列中第一个模型
+            if (STATE.files.length > 0) {
+                updateFileListUI();
+                switchModelTo(0); 
+            }
+        }
+        // ------------------------------------
 
         window.toggleUploadPanel = function() {
             const panel = document.getElementById('upload-panel');
@@ -231,14 +254,14 @@
         // --- 初始化渲染 ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x000000, 0.02);
+        // 彻底移除全局雾效，消除“雾蒙蒙”的浑浊感，呈现极致清透的高级全息质感
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.z = 5;
 
         const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.setClearColor(0x000000);
+        renderer.setClearColor(0x000000); // 恢复极致深邃的纯黑背景
         container.appendChild(renderer.domElement);
 
         // --- 光影增强方案 ---
@@ -251,160 +274,24 @@
         pointLight.position.set(-5, 3, 2);
         scene.add(pointLight);
 
+        // 优化辉光通道设定，提高阈值并减弱强度，彻底消除白茫茫的光污染
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-        bloomPass.threshold = 0.0; bloomPass.strength = 0.8; bloomPass.radius = 0.5;
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.5, 0.4, 0.85);
+        bloomPass.threshold = 0.25; bloomPass.strength = 0.5; bloomPass.radius = 0.4;
         composer.addPass(bloomPass);
 
         const mainGroup = new THREE.Group();
         scene.add(mainGroup);
 
-        // --- 鼠标/触摸/捏合/长按事件注册 ---
-        const initDragAndZoomControls = () => {
-            let initialPinchDistance = 0;
-            let initialScale = STATE.targetScale;
-            let lastTapTime = 0; // 记录移动端触屏上一次点击时间，用于判定双击
-
-            // 长按核心逻辑处理函数：按下开始计时
-            const startLongPressTimer = (clientX, clientY) => {
-                STATE.mouse.startX = clientX;
-                STATE.mouse.startY = clientY;
-                STATE.mouse.isLongPressCanceled = false;
-                
-                clearTimeout(STATE.mouse.longPressTimer);
-                STATE.mouse.longPressTimer = setTimeout(() => {
-                    // 如果中途未被滑动或双指操作取消，并且模型队列大于1，非变形过程中，触发模型切换
-                    if (!STATE.mouse.isLongPressCanceled && STATE.files.length > 1 && !STATE.isMorphing) {
-                        const nextIndex = (STATE.currentIndex + 1) % STATE.files.length;
-                        switchModelTo(nextIndex);
-                        // 移动端震动反馈（如果硬件支持）
-                        if (navigator.vibrate) {
-                            navigator.vibrate(50);
-                        }
-                    }
-                }, 800); // 800ms 触发长按
-            };
-
-            // 滑动过大自动取消长按判定
-            const checkCancelLongPress = (clientX, clientY) => {
-                const dist = Math.hypot(clientX - STATE.mouse.startX, clientY - STATE.mouse.startY);
-                if (dist > 10) { // 移动位移大于10像素则取消长按，判定为旋转手势
-                    STATE.mouse.isLongPressCanceled = true;
-                    clearTimeout(STATE.mouse.longPressTimer);
-                }
-            };
-
-            const cancelLongPress = () => {
-                STATE.mouse.isLongPressCanceled = true;
-                clearTimeout(STATE.mouse.longPressTimer);
-            };
-
-            const onPointerDown = (clientX, clientY) => {
-                STATE.mouse.isDragging = true;
-                STATE.mouse.previousX = clientX;
-                STATE.mouse.previousY = clientY;
-                startLongPressTimer(clientX, clientY);
-            };
-
-            const onPointerMove = (clientX, clientY) => {
-                checkCancelLongPress(clientX, clientY);
-                if (!STATE.mouse.isDragging) return;
-                
-                const deltaX = clientX - STATE.mouse.previousX;
-                const deltaY = clientY - STATE.mouse.previousY;
-
-                // 旋转敏感度阻尼
-                STATE.mouse.targetY += deltaX * 0.006;
-                STATE.mouse.targetX += deltaY * 0.006;
-
-                // 限制X轴旋转范围，防止模型翻转过度
-                STATE.mouse.targetX = Math.max(-Math.PI * 0.4, Math.min(Math.PI * 0.4, STATE.mouse.targetX));
-
-                STATE.mouse.previousX = clientX;
-                STATE.mouse.previousY = clientY;
-            };
-
-            const onPointerUp = () => {
-                STATE.mouse.isDragging = false;
-                cancelLongPress();
-            };
-
-            // 鼠标拖拽 & 长按切换
-            container.addEventListener('mousedown', (e) => onPointerDown(e.clientX, e.clientY));
-            window.addEventListener('mousemove', (e) => onPointerMove(e.clientX, e.clientY));
-            window.addEventListener('mouseup', onPointerUp);
-
-            // PC 端快速双击，切换虚实混合模式
-            container.addEventListener('dblclick', (e) => {
-                e.preventDefault();
-                STATE.isSolidMode = !STATE.isSolidMode;
-            });
-
-            // 鼠标滚轮缩放 (带有阈值限制，防止过大过小)
-            container.addEventListener('wheel', (e) => {
-                e.preventDefault();
-                const zoomSpeed = 0.0012;
-                STATE.targetScale -= e.deltaY * zoomSpeed;
-                STATE.targetScale = Math.max(0.4, Math.min(STATE.targetScale, 3.0));
-            }, { passive: false });
-
-            // 触摸事件适配移动端（支持单指拖拽旋转、双指捏合缩放、双击虚实切换、单指长按切换模型）
-            container.addEventListener('touchstart', (e) => {
-                if (e.touches.length === 1) {
-                    const now = performance.now();
-                    const deltaTap = now - lastTapTime;
-                    
-                    // 双击逻辑判定（间隔小于 300 毫秒视为双击切换虚实）
-                    if (deltaTap < 300 && deltaTap > 0) {
-                        STATE.isSolidMode = !STATE.isSolidMode;
-                        lastTapTime = 0; // 重置
-                        cancelLongPress(); // 双击不触发长按
-                    } else {
-                        lastTapTime = now;
-                        onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
-                    }
-                    initialPinchDistance = 0; // 重置捏合起点
-                } else if (e.touches.length === 2) {
-                    // 进入双指缩放模式
-                    STATE.mouse.isDragging = false; // 终止单指拖拽，避免抖动旋转
-                    cancelLongPress(); // 双指操作立即取消长按
-                    const dx = e.touches[0].clientX - e.touches[1].clientX;
-                    const dy = e.touches[0].clientY - e.touches[1].clientY;
-                    initialPinchDistance = Math.hypot(dx, dy);
-                    initialScale = STATE.targetScale;
-                }
-            }, { passive: true });
-
-            container.addEventListener('touchmove', (e) => {
-                if (e.touches.length === 1) {
-                    onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
-                } else if (e.touches.length === 2 && initialPinchDistance > 0) {
-                    // 双指捏合放大缩小逻辑
-                    const dx = e.touches[0].clientX - e.touches[1].clientX;
-                    const dy = e.touches[0].clientY - e.touches[1].clientY;
-                    const currentDistance = Math.hypot(dx, dy);
-                    const factor = currentDistance / initialPinchDistance;
-                    STATE.targetScale = Math.max(0.4, Math.min(initialScale * factor, 3.0));
-                }
-            }, { passive: true });
-
-            container.addEventListener('touchend', (e) => {
-                if (e.touches.length < 2) {
-                    initialPinchDistance = 0;
-                }
-                onPointerUp();
-            });
-        };
-        initDragAndZoomControls();
-
-        // --- 粒子系统设置与重构 ---
+        // --- 粒子系统 ---
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(PARTICLE_COUNT * 3);
         const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
-        const targetNormals = new Float32Array(PARTICLE_COUNT * 3); // 法线属性数组来记录模型各点朝向
+        const targetNormals = new Float32Array(PARTICLE_COUNT * 3); // 储存采样点的三维法向
         const randoms = new Float32Array(PARTICLE_COUNT);
 
+        // 恢复星云散落初始排布，粒子呈饱满的三维球状星云分布
         for (let i = 0; i < PARTICLE_COUNT; i++) {
             const r = 3 * Math.cbrt(Math.random());
             const theta = Math.random() * 2 * Math.PI;
@@ -415,81 +302,102 @@
             targetPositions[i * 3] = positions[i * 3];
             targetPositions[i * 3 + 1] = positions[i * 3 + 1];
             targetPositions[i * 3 + 2] = positions[i * 3 + 2];
-            targetNormals[i * 3] = 0;
-            targetNormals[i * 3 + 1] = 1;
-            targetNormals[i * 3 + 2] = 0;
+            
+            // 初始球状法向向外
+            targetNormals[i * 3] = Math.sin(phi) * Math.cos(theta);
+            targetNormals[i * 3 + 1] = Math.sin(phi) * Math.sin(theta);
+            targetNormals[i * 3 + 2] = Math.cos(phi);
             randoms[i] = Math.random();
         }
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('targetPosition', new THREE.BufferAttribute(targetPositions, 3));
-        geometry.setAttribute('targetNormal', new THREE.BufferAttribute(targetNormals, 3)); // 注册法线属性
+        geometry.setAttribute('targetNormal', new THREE.BufferAttribute(targetNormals, 3)); 
         geometry.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
 
+        // 重构 Shader 粒子色彩逻辑。恢复为全息星云渐变与法向结合模式
         const shaderMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 uTime: { value: 0 },
                 uMorphProgress: { value: 0 },
                 uSolidProgress: { value: 0 },
-                uColorTop: { value: new THREE.Color('#FFF5E1') },
-                uColorMid: { value: new THREE.Color('#FFD700') },
-                uColorBottom: { value: new THREE.Color('#FF9E3D') }
+                uScale: { value: 1.0 }, // 传入当前的缩放因子
+                // 明亮饱满的高饱和度文物陶金色系
+                uColorTop: { value: new THREE.Color('#FFF8DE') },    
+                uColorMid: { value: new THREE.Color('#F2A65A') },    
+                uColorBottom: { value: new THREE.Color('#A35C30') }  
             },
             vertexShader: `
                 uniform float uTime;
                 uniform float uMorphProgress;
-                uniform float uSolidProgress;
+                uniform float uScale; // 缩放控制信号
                 attribute vec3 targetPosition;
                 attribute vec3 targetNormal;
                 attribute float aRandom;
                 varying vec3 vColor;
                 varying vec3 vPos;
-                varying float vShading;
+                varying float vLight; // 向下传导的高清光影系数
                 uniform vec3 uColorTop;
                 uniform vec3 uColorMid;
                 uniform vec3 uColorBottom;
 
                 void main() {
                     vec3 chaosPos = position;
-                    // 混沌状态下的粒子扰动
                     chaosPos.x += sin(uTime * 0.5 + aRandom * 10.0) * 0.2;
                     chaosPos.y += cos(uTime * 0.6 + aRandom * 10.0) * 0.2;
                     chaosPos.z += sin(uTime * 0.4 + aRandom * 10.0) * 0.2;
-                    
                     float easeProgress = smoothstep(0.0, 1.0, uMorphProgress);
-                    vec3 morphedPos = mix(chaosPos, targetPosition, easeProgress);
-
-                    // 引入流体呼呼吸波动效果（沿着法线做细微的波浪扰动，保证瓦当起伏细节极其灵动）
-                    float wave = sin(uTime * 1.8 + morphedPos.y * 3.5 + aRandom * 6.28) * 0.025 * easeProgress * (1.0 - uSolidProgress);
-                    vec3 finalPos = morphedPos + targetNormal * wave;
+                    vec3 finalPos = mix(chaosPos, targetPosition, easeProgress);
                     vPos = finalPos;
 
-                    // 三维光影计算：模拟右上侧展厅光源照射到瓦当低浮雕表面的漫反射与镜面反射
-                    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
-                    float diff = max(dot(targetNormal, lightDir), 0.0);
+                    // --- 法线光影与极清晰体积凹凸算法 ---
+                    vec3 viewNormal = normalize((modelViewMatrix * vec4(targetNormal, 0.0)).xyz);
                     
-                    // 镜面高光，突显瓦当雕刻的锐利边缘
-                    vec3 viewDir = vec3(0.0, 0.0, 1.0);
-                    vec3 halfDir = normalize(lightDir + viewDir);
-                    float spec = pow(max(dot(targetNormal, halfDir), 0.0), 8.0) * 0.4;
+                    // 模拟主光源与侧补光源
+                    vec3 lightDir1 = normalize(vec3(0.5, 0.8, 0.6));
+                    vec3 lightDir2 = normalize(vec3(-0.6, -0.4, 0.3));
                     
-                    float ambient = 0.25;
-                    float shading = ambient + diff * 0.75 + spec;
-                    vShading = mix(1.0, shading, easeProgress);
+                    // 高对比度半兰伯特光照（极大拓宽阴影过渡，显露文物纹路起伏细节）
+                    float diffuse1 = dot(viewNormal, lightDir1) * 0.5 + 0.5;
+                    diffuse1 = pow(diffuse1, 2.0); // 强化明暗明晰过渡
+                    float diffuse2 = max(dot(viewNormal, lightDir2), 0.0) * 0.2;
+                    
+                    // 镜面反射高光：在突起表面产生碎金风沙折射
+                    vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
+                    vec3 viewDir = normalize(-mvPosition.xyz);
+                    vec3 halfDir = normalize(lightDir1 + viewDir);
+                    float spec = pow(max(dot(viewNormal, halfDir), 0.0), 24.0) * 1.8;
+                    
+                    // 边缘菲涅尔环亮：保持侧棱廓线分明
+                    float rim = pow(1.0 - max(dot(viewNormal, viewDir), 0.0), 4.0) * 0.8;
+                    
+                    // 融合漫反射、镜面和边缘轮廓，形成高对比光照
+                    float modelLight = diffuse1 + diffuse2 + spec + rim;
+                    vLight = mix(1.0, modelLight, easeProgress);
 
-                    // 空间高度插值配色
-                    float mixVal = smoothstep(-2.0, 2.0, finalPos.y);
-                    if (mixVal > 0.4) {
-                        vColor = mix(uColorMid, uColorTop, smoothstep(0.4, 1.2, mixVal));
+                    // --- 基于法向光影的立体色彩渐变体系 ---
+                    vec3 detailColor;
+                    float colorScale = clamp(modelLight * 0.45, 0.0, 1.0);
+                    if (colorScale < 0.4) {
+                        detailColor = mix(uColorBottom, uColorMid, smoothstep(0.0, 0.4, colorScale));
                     } else {
-                        vColor = mix(uColorBottom, uColorMid, smoothstep(0.0, 0.4, mixVal));
+                        detailColor = mix(uColorMid, uColorTop, smoothstep(0.4, 1.0, colorScale));
                     }
 
-                    vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
-                    
-                    // 粒子尺寸自适应阴影：背光处的粒子自动缩小形成微观阴影效果，受光处稍微变大，极大地强化低浮雕细节！
-                    float sizeShadingFactor = mix(0.4, 1.25, diff);
-                    float pointSizeBase = 4.0;
-                    gl_PointSize = (pointSizeBase * (0.8 + aRandom * 0.4) * sizeShadingFactor) / -mvPosition.z;
+                    // 混沌状态下的纵向高度色彩渐变
+                    float mixVal = smoothstep(-2.0, 2.0, finalPos.y);
+                    vec3 heightColor;
+                    if (mixVal > 0.4) {
+                        heightColor = mix(uColorMid, uColorTop, smoothstep(0.4, 1.2, mixVal));
+                    } else {
+                        heightColor = mix(uColorBottom, uColorMid, smoothstep(0.0, 0.4, mixVal));
+                    }
+
+                    // 随变形过渡平滑转化色彩逻辑
+                    vColor = mix(heightColor, detailColor, easeProgress);
+
+                    // 模型放大时自动微缩粒子大小，使大瓦当细节依旧锐利，不糊不挤。
+                    float sizeFactor = mix(2.5, 1.3, smoothstep(1.0, 2.5, uScale));
+                    gl_PointSize = (sizeFactor * (1.0 + aRandom)) / -mvPosition.z;
                     gl_Position = projectionMatrix * mvPosition;
                 }
             `,
@@ -498,24 +406,28 @@
                 uniform float uSolidProgress;
                 varying vec3 vColor;
                 varying vec3 vPos;
-                varying float vShading;
-
+                varying float vLight;
                 void main() {
                     vec2 xy = gl_PointCoord.xy - vec2(0.5);
-                    float dist = length(xy);
-                    if(dist > 0.5) discard;
-                    
-                    // 高精密带亮核的平滑星光粒子
-                    float particleAlpha = smoothstep(0.5, 0.05, dist);
-                    
+                    if(length(xy) > 0.5) discard;
                     float scanLine = mix(4.5, -4.5, uSolidProgress);
-                    float solidAlphaFactor = 1.0 - smoothstep(scanLine - 0.3, scanLine + 0.3, vPos.y);
-                    if (solidAlphaFactor <= 0.0) discard;
+                    float particleAlpha = 1.0 - smoothstep(scanLine - 0.3, scanLine + 0.3, vPos.y);
+                    if (particleAlpha <= 0.0) discard;
                     
-                    float intensity = mix(1.8, 1.15, smoothstep(0.3, 1.0, uMorphProgress));
+                    // 提升环境保底光至 0.45，大幅提亮背光暗部，保证阴影里的粒子在黑色背景下依然可见
+                    float ambient = 0.45;
+                    float lightFactor = max(vLight, ambient);
                     
-                    // 结合顶点着色器传过来的法线光影强度渲染粒子，实现细腻的三维浮雕质感
-                    gl_FragColor = vec4(vColor * intensity * vShading, particleAlpha * solidAlphaFactor); 
+                    // 提升整体亮度基数，使模型在空间中熠熠生辉
+                    float baseIntensity = mix(1.6, 1.2, smoothstep(0.3, 1.0, uMorphProgress));
+                    float intensity = baseIntensity * lightFactor;
+                    
+                    // 粒子不透明度控制：背阴处粒子保留至少 55% 的不透明度，保证极佳的立体细节
+                    float shapeAlpha = smoothstep(0.5, 0.1, length(xy));
+                    float alphaFactor = mix(1.0, max(lightFactor, 0.55), uMorphProgress);
+                    float finalAlpha = shapeAlpha * particleAlpha * alphaFactor;
+                    
+                    gl_FragColor = vec4(vColor * intensity, finalAlpha); 
                 }
             `,
             transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
@@ -576,7 +488,7 @@
                     if (child.isMesh) {
                         let geom = child.geometry.clone();
                         geom.center();
-                        const scale = 2.8 / (geom.boundingSphere || (geom.computeBoundingSphere(), geom.boundingSphere)).radius;
+                        const scale = 1.6 / (geom.boundingSphere || (geom.computeBoundingSphere(), geom.boundingSphere)).radius;
                         geom.scale(scale, scale, scale);
                         geometries.push(geom);
                     }
@@ -584,27 +496,30 @@
                 if (geometries.length === 0) return callback(false);
                 const mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries);
                 const sampler = new MeshSurfaceSampler(new THREE.Mesh(mergedGeometry)).build();
+                
                 const targetPosArray = geometry.attributes.targetPosition.array;
-                const targetNormalArray = geometry.attributes.targetNormal.array; // 获取粒子法线属性映射
+                const targetNormalArray = geometry.attributes.targetNormal.array; // 获取法线数组
+                
                 const tempPos = new THREE.Vector3();
-                const tempNormal = new THREE.Vector3(); // 临时存储法线数据
+                const tempNormal = new THREE.Vector3(); // 用于暂存采样的法向
 
                 let currentIdx = 0;
                 const batchSize = 15000;
                 function processBatch() {
                     const limit = Math.min(currentIdx + batchSize, PARTICLE_COUNT);
                     for (; currentIdx < limit; currentIdx++) {
-                        sampler.sample(tempPos, tempNormal); // 同时高精密采样点的位置与法线方向
+                        sampler.sample(tempPos, tempNormal); // 采样的同时也获取顶点的表面法向量
                         targetPosArray[currentIdx * 3] = tempPos.x;
                         targetPosArray[currentIdx * 3 + 1] = tempPos.y;
                         targetPosArray[currentIdx * 3 + 2] = tempPos.z;
-                        targetNormalArray[currentIdx * 3] = tempNormal.x; // 保存法线到GPU缓冲
+                        
+                        targetNormalArray[currentIdx * 3] = tempNormal.x;
                         targetNormalArray[currentIdx * 3 + 1] = tempNormal.y;
                         targetNormalArray[currentIdx * 3 + 2] = tempNormal.z;
                     }
                     if (currentIdx < PARTICLE_COUNT) { requestAnimationFrame(processBatch); } else {
                         geometry.attributes.targetPosition.needsUpdate = true;
-                        geometry.attributes.targetNormal.needsUpdate = true; // 刷新GPU渲染管线法线缓冲
+                        geometry.attributes.targetNormal.needsUpdate = true; // 更新 GPU 里的法向属性
                         if (STATE.currentSolidMesh) mainGroup.remove(STATE.currentSolidMesh);
                         mergedGeometry.computeVertexNormals();
                         STATE.currentSolidMesh = new THREE.Mesh(mergedGeometry, solidMaterial);
@@ -622,7 +537,6 @@
             if (files.length > 0) { STATE.files.push(...files); updateFileListUI(); if (STATE.currentIndex === -1) switchModelTo(0); }
         });
 
-        // 更新上传模型队列列表UI
         function updateFileListUI() {
             document.getElementById('file-count').innerText = `(${STATE.files.length})`;
             const list = document.getElementById('file-list');
@@ -634,7 +548,6 @@
             });
         }
 
-        // 切换加载3D OBJ文物模型
         async function switchModelTo(index) {
             if (STATE.isMorphing) return;
             STATE.currentIndex = index; updateFileListUI();
@@ -642,7 +555,9 @@
             STATE.isMorphing = true;
             await animateMorph(STATE.morphProgress, 0, 300);
 
+            // 获取文本（通过懒加载函数或真实的File对象皆兼容）
             const text = await STATE.files[index].text();
+            
             parseAndSampleOBJ(text, async (success) => {
                 if (success) {
                     await animateMorph(0, 1, 1000);
@@ -654,7 +569,7 @@
             });
         }
 
-        // 控制融合变形动画插值
+        // 动画过渡
         function animateMorph(from, to, duration) {
             return new Promise(resolve => {
                 const start = performance.now();
@@ -667,7 +582,6 @@
             });
         }
 
-        // 解析渲染AI文物历史数据库百科
         function generateAICommentary(filename) {
             const aiText = document.getElementById('ai-text');
             const aiTitle = document.getElementById('ai-title');
@@ -696,19 +610,28 @@
                 const landmarks = results.multiHandLandmarks[0];
                 document.getElementById('cam-status').className = 'w-1.5 h-1.5 rounded-full bg-green-500';
                 drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#FFD700', lineWidth: 2});
-                
-                // 将摄像头的手势控制融合到目标旋转属性
                 STATE.targetRotationY = -(landmarks[9].x - 0.5) * Math.PI * 2.5;
                 const pitch = (landmarks[9].y - landmarks[0].y) / Math.hypot(landmarks[9].x-landmarks[0].x, landmarks[9].y-landmarks[0].y);
                 STATE.targetRotationX = Math.max(0, Math.min((pitch + 0.4) * Math.PI * 1.2, Math.PI));
                 
-                // 手势 pinch 缩放映射控制
+                // 1. 各手指弯曲判定（比较指尖到手腕与PIP关节到手腕的距离，完美适应手部任意旋转角度）
+                const indexFolded = Math.hypot(landmarks[8].x - landmarks[0].x, landmarks[8].y - landmarks[0].y) < Math.hypot(landmarks[6].x - landmarks[0].x, landmarks[6].y - landmarks[0].y);
+                const middleFolded = Math.hypot(landmarks[12].x - landmarks[0].x, landmarks[12].y - landmarks[0].y) < Math.hypot(landmarks[10].x - landmarks[0].x, landmarks[10].y - landmarks[0].y);
+                const ringFolded = Math.hypot(landmarks[16].x - landmarks[0].x, landmarks[16].y - landmarks[0].y) < Math.hypot(landmarks[14].x - landmarks[0].x, landmarks[14].y - landmarks[0].y);
+                const pinkyFolded = Math.hypot(landmarks[20].x - landmarks[0].x, landmarks[20].y - landmarks[0].y) < Math.hypot(landmarks[18].x - landmarks[0].x, landmarks[18].y - landmarks[0].y);
+
+                // 2. 握拳判定：中指、无名指、小指、食指中，至少有3个手指是弯曲折叠状态
+                const foldedCount = (indexFolded ? 1 : 0) + (middleFolded ? 1 : 0) + (ringFolded ? 1 : 0) + (pinkyFolded ? 1 : 0);
+                const isFist = foldedCount >= 3;
+
+                // 3. OK手势判定：食指与拇指指尖捏合，且中、无名、小指必须均呈伸展状态
                 const pinch = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y);
-                STATE.targetScale = Math.max(0.4, Math.min(pinch * 5.0, 3.0));
-                
-                const isFist = Math.hypot(landmarks[8].x - landmarks[0].x, landmarks[8].y - landmarks[0].y) < Math.hypot(landmarks[5].x - landmarks[0].x, landmarks[5].y - landmarks[0].y);
+                const isOK = pinch < 0.05 && !middleFolded && !ringFolded && !pinkyFolded;
+
+                STATE.targetScale = Math.max(0.6, Math.min(pinch * 5.0, 2.5));
                 const deltaTime = (performance.now() - STATE.lastFrameTime) / 1000;
                 STATE.lastFrameTime = performance.now();
+
                 if (isFist) {
                     if (!STATE.isCooldown && !STATE.isMorphing) {
                         STATE.actionProgress += deltaTime / 1.0; 
@@ -717,7 +640,7 @@
                             STATE.isCooldown = true; setTimeout(() => STATE.isCooldown = false, 800);
                         }
                     }
-                } else if (pinch < 0.04 && STATE.files.length > 1) {
+                } else if (isOK && STATE.files.length > 1) {
                     STATE.actionProgress += deltaTime / 1.5; 
                     if (STATE.actionProgress >= 1) { STATE.actionProgress = 0; switchModelTo((STATE.currentIndex + 1) % STATE.files.length); }
                 } else { STATE.actionProgress = Math.max(0, STATE.actionProgress - deltaTime * 3); }
@@ -732,7 +655,110 @@
             new Camera(document.getElementById('video-input'), { onFrame: async () => await hands.send({image: document.getElementById('video-input')}), width: 320, height: 180 }).start();
         });
 
-        // 核心渲染循环
+        // --- 鼠标滚轮、点击拖拽旋转、平板捏合缩放、双击及长按逻辑 ---
+        let isPointerDown = false;
+        let pointerStart = { x: 0, y: 0 };
+        let pointerLast = { x: 0, y: 0 };
+        let activePointers = [];
+        let initialPinchDist = 0;
+        let initialTargetScale = 1.0;
+        let longPressTimer = null;
+        let lastPointerDownTime = 0;
+
+        // 计算双指间距
+        function getDistance(p1, p2) {
+            return Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+        }
+
+        container.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.glass-panel') || e.target.closest('button') || e.target.closest('label') || e.target.closest('input')) return;
+            
+            isPointerDown = true;
+            activePointers.push(e);
+            pointerStart = { x: e.clientX, y: e.clientY };
+            pointerLast = { x: e.clientX, y: e.clientY };
+
+            const now = performance.now();
+            // 连续快速双击两下切换虚实转化
+            if (now - lastPointerDownTime < 300) {
+                if (!STATE.isMorphing) {
+                    STATE.isSolidMode = !STATE.isSolidMode;
+                }
+                if (longPressTimer) clearTimeout(longPressTimer);
+            } else {
+                // 点击长按逻辑，按住 800ms 切换下一个模型
+                if (longPressTimer) clearTimeout(longPressTimer);
+                longPressTimer = setTimeout(() => {
+                    if (STATE.files.length > 1 && !STATE.isMorphing) {
+                        switchModelTo((STATE.currentIndex + 1) % STATE.files.length);
+                    }
+                }, 800);
+            }
+            lastPointerDownTime = now;
+
+            if (activePointers.length === 2) {
+                initialPinchDist = getDistance(activePointers[0], activePointers[1]);
+                initialTargetScale = STATE.targetScale;
+                if (longPressTimer) clearTimeout(longPressTimer);
+            }
+        });
+
+        container.addEventListener('pointermove', (e) => {
+            const idx = activePointers.findIndex(p => p.pointerId === e.pointerId);
+            if (idx !== -1) activePointers[idx] = e;
+
+            if (!isPointerDown) return;
+
+            // 移动超出 10px 即取消长按判定
+            const distMoved = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
+            if (distMoved > 10 && longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+
+            if (activePointers.length === 1) {
+                // 鼠标/单指拖拽旋转模型
+                const dx = e.clientX - pointerLast.x;
+                const dy = e.clientY - pointerLast.y;
+                STATE.targetRotationY += dx * 0.008;
+                STATE.targetRotationX = Math.max(-Math.PI, Math.min(STATE.targetRotationX + dy * 0.008, Math.PI));
+                pointerLast = { x: e.clientX, y: e.clientY };
+            } else if (activePointers.length === 2) {
+                // 双指捏合放大缩小模型
+                const dist = getDistance(activePointers[0], activePointers[1]);
+                if (initialPinchDist > 0) {
+                    const factor = dist / initialPinchDist;
+                    STATE.targetScale = Math.max(0.6, Math.min(initialTargetScale * factor, 2.5));
+                }
+            }
+        });
+
+        const endPointer = (e) => {
+            isPointerDown = false;
+            activePointers = activePointers.filter(p => p.pointerId !== e.pointerId);
+            if (activePointers.length < 2) {
+                initialPinchDist = 0;
+            }
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+        };
+
+        window.addEventListener('pointerup', endPointer);
+        window.addEventListener('pointercancel', endPointer);
+
+        // 鼠标滚轮缩放模型
+        container.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomSpeed = 0.08;
+            const delta = -Math.sign(e.deltaY);
+            STATE.targetScale = Math.max(0.6, Math.min(STATE.targetScale + delta * zoomSpeed, 2.5));
+        }, { passive: false });
+
+        // --- 触发懒加载预存 ---
+        initPreloadModels();
+
         function animate() {
             requestAnimationFrame(animate);
             const time = performance.now() / 1000;
@@ -742,24 +768,15 @@
             shaderMaterial.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
             if (solidMaterial.userData.shader) solidMaterial.userData.shader.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
             
-            // 手势追踪带来的旋转偏移插值
-            STATE.currentRotationY = THREE.MathUtils.lerp(STATE.currentRotationY, STATE.targetRotationY, 0.08);
-            STATE.currentRotationX = THREE.MathUtils.lerp(STATE.currentRotationX, STATE.targetRotationX, 0.08);
-            
-            // 鼠标/手指拖动旋转的阻尼插值
-            STATE.mouse.currentX = THREE.MathUtils.lerp(STATE.mouse.currentX, STATE.mouse.targetX, 0.08);
-            STATE.mouse.currentY = THREE.MathUtils.lerp(STATE.mouse.currentY, STATE.mouse.targetY, 0.08);
-
-            // 缩放尺寸插值平滑处理
+            // 提高旋转惯性过渡速度（从 0.08 提高到 0.22），使鼠标松开/停下后模型立刻精确刹车，不发生漂移
+            STATE.currentRotationY = THREE.MathUtils.lerp(STATE.currentRotationY, STATE.targetRotationY, 0.22);
+            STATE.currentRotationX = THREE.MathUtils.lerp(STATE.currentRotationX, STATE.targetRotationX, 0.22);
             STATE.currentScale = THREE.MathUtils.lerp(STATE.currentScale, STATE.targetScale, 0.1);
             
-            // 融合手势和鼠标/双指触控造成的旋转变换
-            mainGroup.rotation.set(
-                STATE.currentRotationX + STATE.mouse.currentX, 
-                STATE.currentRotationY + STATE.mouse.currentY, 
-                0
-            );
+            // 将实时缩放因子传递给 Shader，动态改变粒子呈现尺寸
+            shaderMaterial.uniforms.uScale.value = STATE.currentScale;
 
+            mainGroup.rotation.set(STATE.currentRotationX, STATE.currentRotationY, 0);
             mainGroup.scale.setScalar(STATE.currentScale);
             mainGroup.position.y = Math.sin(time * 0.5) * 0.1;
             composer.render();
@@ -768,6 +785,20 @@
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+
+    <script>
+        // 监听来自父页面（Unity）的消息并处理（可选）
+        window.addEventListener('message', function(event) {
+            if (event.data === 'fromParent: i am ready') {
+                console.log('手势网站已准备好与 Unity 父页面通信');
+            }
+        });
+
+        // 当用户点击返回按钮时，通知父页面关闭手势覆盖层
+        document.getElementById('backToUnityBtn').addEventListener('click', function() {
+            window.parent.postMessage('fromGesture: close me', '*');
         });
     </script>
 </body>
