@@ -40,6 +40,11 @@
         .panel-transition {
             transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
         }
+
+        /* 优化滚轮触屏体验 */
+        #wheel-interactive-area {
+            touch-action: none;
+        }
     </style>
 
     <!-- MediaPipe Scripts -->
@@ -50,17 +55,17 @@
 </head>
 <body class="text-white font-sans h-screen w-screen">
 
-    <div id="canvas-container" class="absolute inset-0 z-0"></div>
+    <div id="canvas-container" class="absolute inset-0 z-0" style="touch-action: none;"></div>
 
     <!-- Title UI -->
     <div class="absolute left-10 top-10 z-10 pointer-events-none">
-        <h1 class="text-3xl md:text-4xl font-normal tracking-[0.18em] text-white/90 drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)] mb-3">
+        <h1 class="text-[32px] md:text-[42px] font-normal tracking-[0.18em] text-white/90 drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)] mb-3">
             高句丽瓦当数智化手势交互
         </h1>
-        <p class="text-[11px] md:text-xs text-white/60 font-light tracking-[0.35em] uppercase mb-4">
+        <p class="text-xs md:text-[13px] text-white/60 font-light tracking-[0.35em] uppercase mb-4">
             Goguryeo Wadang Digital Gesture Interaction
         </p>
-        <div class="w-56 h-[1px] bg-gradient-to-r from-gold/50 to-transparent mb-6"></div>
+        <div class="w-64 h-[1px] bg-gradient-to-r from-gold/50 to-transparent mb-6"></div>
 
         <button id="backToUnityBtn" class="pointer-events-auto px-5 py-2.5 glass-panel rounded-lg text-xs tracking-widest text-white/80 hover:text-gold hover:border-gold/50 hover:bg-white/10 transition-all duration-300 flex items-center gap-2 backdrop-blur-md">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -68,6 +73,35 @@
             </svg>
             完成手势，返回
         </button>
+    </div>
+
+    <!-- Left Center Wheel Selector UI (新建转盘拖拽选择区域，支持拖拽、吸附、滚轮与拼音显示) -->
+    <div id="wheel-selector-container" class="absolute left-0 top-0 bottom-0 w-[300px] z-10 pointer-events-none flex items-center justify-start overflow-hidden">
+        <!-- 仅中间区域响应手势，防止跟顶部标题和底部视频组件手势冲突，位置稍微往下移（top-10% bottom-30%） -->
+        <div id="wheel-interactive-area" class="pointer-events-auto absolute left-0 top-[10%] bottom-[30%] w-[280px] cursor-grab active:cursor-grabbing">
+            <!-- SVG Arc Track -->
+            <svg class="absolute inset-0 w-full h-full pointer-events-none">
+                <defs>
+                    <!-- 辉光滤镜，提供高亮光晕支持 -->
+                    <filter id="wheel-svg-glow" x="-20%" y="-20%" width="140%" height="140%">
+                        <feGaussianBlur stdDeviation="5" result="blur" />
+                        <feMerge>
+                            <feMergeNode in="blur" />
+                            <feMergeNode in="SourceGraphic" />
+                        </feMerge>
+                    </filter>
+                </defs>
+                <!-- Outer Glowing Arc Track (外环辉光轨道) -->
+                <path id="wheel-arc-track" d="" fill="none" stroke="rgba(255, 215, 0, 0.12)" stroke-width="2.5" filter="url(#wheel-svg-glow)" />
+                <!-- Inner Dashed Track (内环刻度虚线) -->
+                <path id="wheel-arc-dash" d="" fill="none" stroke="rgba(255, 215, 0, 0.2)" stroke-width="1.5" stroke-dasharray="3, 5" />
+                <!-- Focus Target Indicator Line & Dot at 0 degrees -->
+                <line id="wheel-focus-pointer" x1="0" y1="0" x2="0" y2="0" stroke="#FFD700" stroke-width="2.5" stroke-linecap="round" filter="url(#wheel-svg-glow)" />
+                <circle id="wheel-focus-dot" cx="0" cy="0" r="5" fill="#FFD700" filter="drop-shadow(0 0 6px rgba(255, 215, 0, 0.8))" />
+            </svg>
+            <!-- Dynamic Items Labels Container -->
+            <div id="wheel-items" class="absolute inset-0 pointer-events-none"></div>
+        </div>
     </div>
 
     <!-- Collapsible Upload Panel -->
@@ -171,6 +205,16 @@
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
+        // --- 优化后的滚轮转盘核心物理、布局参数（位置上移后微调向下：centerY 从 35% 调整到 40%） ---
+        const R = 300;             // 往外拉伸：转盘半径增加，获得更开阔柔和的轨迹
+        const X_c = -190;          // 往外偏移：中心向左推移，使得弧度仅部分露在屏内
+        const beta = 0.45;         // 每项的弧角间隔
+        
+        // 动态计算垂直中轴（下移至 40% 高度处，比之前的 35% 稍低，更加舒适）
+        function getWheelCenterY() {
+            return window.innerHeight * 0.40; 
+        }
+
         // --- 全局状态 ---
         const PARTICLE_COUNT = 300000;
         const STATE = {
@@ -187,46 +231,50 @@
             actionProgress: 0, 
             isCooldown: false,
             lastFrameTime: performance.now(),
-            isPanelFolded: false
+            isPanelFolded: false,
+            // 转盘选择器角度控制
+            wheelAngle: 0,
+            targetWheelAngle: 0
         };
 
         const KNOWLEDGE_BASE = {
             "兽面纹": "兽面纹瓦当的数量在高句丽时期仅次于莲花纹瓦当。兽面纹瓦当多是与中原文化中的兽纹与饕餮纹演化而来的。高句丽受其影响注入了东北地区东北虎的形象。从而形成了高句丽人典型的兽面纹饰题材。<br><br>兽面纹的形成也是一种对强者的崇拜，寓意着强大，力量，牢固与邪祟不得靠近的庄严形象。",
-            "莲花纹": "莲花纹瓦当是高句丽时期出土数量最多、分布最广的瓦当。佛教的传入对高句丽的文化艺术产生了深远影响，莲花出淤泥而不染的特质契合了当时的宗教信仰与审美。",
-            "卷云纹": "卷云纹瓦当线条流畅，气韵生动，象征着天空、云彩以及高升的祥瑞之气，体现了古人对自然天象的敬畏与浪漫的艺术加工。",
-            "忍冬纹": "忍冬纹瓦当图案源于忍冬植物，寓意延年益寿、长久不衰。这种纹饰随佛教传入，后经过本土化融合，成为极具时代特色的装饰图案。"
+            "莲花纹": "莲花纹瓦当在中原地区出现及少，只有秦代有少量的出土发现。而高句丽瓦当纹饰中莲花纹数量占有较大的比例。从莲花纹可以看出：对高句丽祖先的传说信仰的传承、中原文化与艺术对莲花的高度赞誉与喜爱、佛教传入对其信仰的影响和对女性生殖崇拜的解读。<br><br>莲花纹饰寓意着高尚品格和对永恒生命力的向往。",
+            "卷云纹": "卷云纹瓦当在春秋时期就已出现了，秦汉时期得以规范。而高句丽卷云纹文字瓦当只在集安地区发现。汉代汉武帝设立四郡以来，玄菟郡与辽东地区接近，所以这时期的卷云纹瓦当也深受其文化和艺术上的影响。<br><br>卷云纹也寓意着风云如意，瑞雪宜年的美好愿望。",
+            "忍冬纹": "忍冬纹瓦当在相当长的一段时间中被国内学者认为只有在吉林省集安市有出土发现。但是随着信息的发达与各国之间的文化艺术交流，在朝鲜也先后有所发现。忍冬也称“金银花”“二花”。是一种多年生半常绿缠绕灌木，抗严寒等恶劣环境。东汉末期开始作为一种纹饰出现在绘画雕刻等艺术形式之上。<br><br>忍冬纹寓意着高句丽人的运动精神与对抗大自然严酷环境的一种强大决心。"
         };
 
         // --- 核心预存逻辑：懒加载伪装模型库 ---
         const PRELOAD_MODELS = [
-            { name: "兽面纹瓦当.obj", path: "models/shoumian_wadang.obj" },
-            { name: "莲花纹瓦当.obj", path: "models/lianhua_wadang.obj" },
-            { name: "卷云纹瓦当.obj", path: "models/juanyun_wadang.obj" },
-            { name: "忍冬纹瓦当.obj", path: "models/rendong_wadang.obj" }
+            { name: "兽面纹瓦当.obj", path: "models/shoumian_wadang.obj", pinyin: "SHOU MIAN WEN WA DANG" },
+            { name: "莲花纹瓦当.obj", path: "models/lianhua_wadang.obj", pinyin: "LIAN HUA WEN WA DANG" },
+            { name: "卷云纹瓦当.obj", path: "models/juanyun_wadang.obj", pinyin: "JUAN YUN WEN WA DANG" },
+            { name: "忍冬纹瓦当.obj", path: "models/rendong_wadang.obj", pinyin: "REN DONG WEN WA DANG" }
         ];
 
         function initPreloadModels() {
             PRELOAD_MODELS.forEach(item => {
                 STATE.files.push({
                     name: item.name,
-                    // 【懒加载核心】只有在真正被选中（调用 .text()）时，才去网络请求 obj 数据
+                    pinyin: item.pinyin,
+                    // 【懒加载核心】只有在真正被选中时去请求真实 obj
                     text: async () => {
                         try {
                             const response = await fetch(item.path);
                             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                             return await response.text();
                         } catch (error) {
-                            console.error(`无法加载预存模型 [${item.name}]，请确认 models 文件夹及其路径是否正确:`, error);
-                            // 若加载失败，返回一个极简的立方体防止程序崩溃
+                            console.error(`无法加载预存模型 [${item.name}]，将采用极简占位几何体:`, error);
                             return "v -1 -1 1\nv 1 -1 1\nv -1 1 1\nv 1 1 1\nv -1 -1 -1\nv 1 -1 -1\nv -1 1 -1\nv 1 1 -1\nf 1 2 4 3\nf 3 4 8 7\nf 7 8 6 5\nf 5 6 2 1\nf 3 7 5 1\nf 2 6 8 4";
                         }
                     }
                 });
             });
 
-            // 预存完成后，刷新右侧列表UI，并自动加载队列中第一个模型
             if (STATE.files.length > 0) {
                 updateFileListUI();
+                initWheelUI();
+                initWheelInteractions();
                 switchModelTo(0); 
             }
         }
@@ -251,20 +299,18 @@
             }
         };
 
-        // --- 初始化渲染 ---
+        // --- 初始化三维场景 ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        // 彻底移除全局雾效，消除“雾蒙蒙”的浑浊感，呈现极致清透的高级全息质感
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.z = 5;
 
         const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.setClearColor(0x000000); // 恢复极致深邃的纯黑背景
+        renderer.setClearColor(0x000000); 
         container.appendChild(renderer.domElement);
 
-        // --- 光影增强方案 ---
         scene.add(new THREE.AmbientLight(0xffffff, 0.75)); 
         const dirLight = new THREE.DirectionalLight(0xffffff, 1.4); 
         dirLight.position.set(5, 5, 5);
@@ -274,7 +320,6 @@
         pointLight.position.set(-5, 3, 2);
         scene.add(pointLight);
 
-        // 优化辉光通道设定，提高阈值并减弱强度，彻底消除白茫茫的光污染
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.5, 0.4, 0.85);
@@ -284,14 +329,13 @@
         const mainGroup = new THREE.Group();
         scene.add(mainGroup);
 
-        // --- 粒子系统 ---
+        // --- 粒子系统创建 ---
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(PARTICLE_COUNT * 3);
         const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
-        const targetNormals = new Float32Array(PARTICLE_COUNT * 3); // 储存采样点的三维法向
+        const targetNormals = new Float32Array(PARTICLE_COUNT * 3); 
         const randoms = new Float32Array(PARTICLE_COUNT);
 
-        // 恢复星云散落初始排布，粒子呈饱满的三维球状星云分布
         for (let i = 0; i < PARTICLE_COUNT; i++) {
             const r = 3 * Math.cbrt(Math.random());
             const theta = Math.random() * 2 * Math.PI;
@@ -303,7 +347,6 @@
             targetPositions[i * 3 + 1] = positions[i * 3 + 1];
             targetPositions[i * 3 + 2] = positions[i * 3 + 2];
             
-            // 初始球状法向向外
             targetNormals[i * 3] = Math.sin(phi) * Math.cos(theta);
             targetNormals[i * 3 + 1] = Math.sin(phi) * Math.sin(theta);
             targetNormals[i * 3 + 2] = Math.cos(phi);
@@ -314,14 +357,12 @@
         geometry.setAttribute('targetNormal', new THREE.BufferAttribute(targetNormals, 3)); 
         geometry.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
 
-        // 重构 Shader 粒子色彩逻辑。恢复为全息星云渐变与法向结合模式
         const shaderMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 uTime: { value: 0 },
                 uMorphProgress: { value: 0 },
                 uSolidProgress: { value: 0 },
-                uScale: { value: 1.0 }, // 传入当前的缩放因子
-                // 明亮饱满的高饱和度文物陶金色系
+                uScale: { value: 1.0 }, 
                 uColorTop: { value: new THREE.Color('#FFF8DE') },    
                 uColorMid: { value: new THREE.Color('#F2A65A') },    
                 uColorBottom: { value: new THREE.Color('#A35C30') }  
@@ -329,13 +370,13 @@
             vertexShader: `
                 uniform float uTime;
                 uniform float uMorphProgress;
-                uniform float uScale; // 缩放控制信号
+                uniform float uScale;
                 attribute vec3 targetPosition;
                 attribute vec3 targetNormal;
                 attribute float aRandom;
                 varying vec3 vColor;
                 varying vec3 vPos;
-                varying float vLight; // 向下传导的高清光影系数
+                varying float vLight;
                 uniform vec3 uColorTop;
                 uniform vec3 uColorMid;
                 uniform vec3 uColorBottom;
@@ -349,32 +390,23 @@
                     vec3 finalPos = mix(chaosPos, targetPosition, easeProgress);
                     vPos = finalPos;
 
-                    // --- 法线光影与极清晰体积凹凸算法 ---
                     vec3 viewNormal = normalize((modelViewMatrix * vec4(targetNormal, 0.0)).xyz);
-                    
-                    // 模拟主光源与侧补光源
                     vec3 lightDir1 = normalize(vec3(0.5, 0.8, 0.6));
                     vec3 lightDir2 = normalize(vec3(-0.6, -0.4, 0.3));
                     
-                    // 高对比度半兰伯特光照（极大拓宽阴影过渡，显露文物纹路起伏细节）
                     float diffuse1 = dot(viewNormal, lightDir1) * 0.5 + 0.5;
-                    diffuse1 = pow(diffuse1, 2.0); // 强化明暗明晰过渡
+                    diffuse1 = pow(diffuse1, 2.0);
                     float diffuse2 = max(dot(viewNormal, lightDir2), 0.0) * 0.2;
                     
-                    // 镜面反射高光：在突起表面产生碎金风沙折射
                     vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
                     vec3 viewDir = normalize(-mvPosition.xyz);
                     vec3 halfDir = normalize(lightDir1 + viewDir);
                     float spec = pow(max(dot(viewNormal, halfDir), 0.0), 24.0) * 1.8;
                     
-                    // 边缘菲涅尔环亮：保持侧棱廓线分明
                     float rim = pow(1.0 - max(dot(viewNormal, viewDir), 0.0), 4.0) * 0.8;
-                    
-                    // 融合漫反射、镜面和边缘轮廓，形成高对比光照
                     float modelLight = diffuse1 + diffuse2 + spec + rim;
                     vLight = mix(1.0, modelLight, easeProgress);
 
-                    // --- 基于法向光影的立体色彩渐变体系 ---
                     vec3 detailColor;
                     float colorScale = clamp(modelLight * 0.45, 0.0, 1.0);
                     if (colorScale < 0.4) {
@@ -383,7 +415,6 @@
                         detailColor = mix(uColorMid, uColorTop, smoothstep(0.4, 1.0, colorScale));
                     }
 
-                    // 混沌状态下的纵向高度色彩渐变
                     float mixVal = smoothstep(-2.0, 2.0, finalPos.y);
                     vec3 heightColor;
                     if (mixVal > 0.4) {
@@ -392,10 +423,7 @@
                         heightColor = mix(uColorBottom, uColorMid, smoothstep(0.0, 0.4, mixVal));
                     }
 
-                    // 随变形过渡平滑转化色彩逻辑
                     vColor = mix(heightColor, detailColor, easeProgress);
-
-                    // 模型放大时自动微缩粒子大小，使大瓦当细节依旧锐利，不糊不挤。
                     float sizeFactor = mix(2.5, 1.3, smoothstep(1.0, 2.5, uScale));
                     gl_PointSize = (sizeFactor * (1.0 + aRandom)) / -mvPosition.z;
                     gl_Position = projectionMatrix * mvPosition;
@@ -414,15 +442,11 @@
                     float particleAlpha = 1.0 - smoothstep(scanLine - 0.3, scanLine + 0.3, vPos.y);
                     if (particleAlpha <= 0.0) discard;
                     
-                    // 提升环境保底光至 0.45，大幅提亮背光暗部，保证阴影里的粒子在黑色背景下依然可见
                     float ambient = 0.45;
                     float lightFactor = max(vLight, ambient);
-                    
-                    // 提升整体亮度基数，使模型在空间中熠熠生辉
                     float baseIntensity = mix(1.6, 1.2, smoothstep(0.3, 1.0, uMorphProgress));
                     float intensity = baseIntensity * lightFactor;
                     
-                    // 粒子不透明度控制：背阴处粒子保留至少 55% 的不透明度，保证极佳的立体细节
                     float shapeAlpha = smoothstep(0.5, 0.1, length(xy));
                     float alphaFactor = mix(1.0, max(lightFactor, 0.55), uMorphProgress);
                     float finalAlpha = shapeAlpha * particleAlpha * alphaFactor;
@@ -435,7 +459,7 @@
         const particleSystem = new THREE.Points(geometry, shaderMaterial);
         mainGroup.add(particleSystem);
 
-        // --- 实体材质优化 ---
+        // --- 实体模型材质设定 ---
         function createWadangTexture() {
             const canvas = document.createElement('canvas');
             canvas.width = 1024; canvas.height = 1024;
@@ -478,7 +502,7 @@
             solidMaterial.userData.shader = shader;
         };
 
-        // --- 模型逻辑 ---
+        // --- OBJ采样与转换计算 ---
         const objLoader = new OBJLoader();
         function parseAndSampleOBJ(objText, callback) {
             try {
@@ -498,17 +522,17 @@
                 const sampler = new MeshSurfaceSampler(new THREE.Mesh(mergedGeometry)).build();
                 
                 const targetPosArray = geometry.attributes.targetPosition.array;
-                const targetNormalArray = geometry.attributes.targetNormal.array; // 获取法线数组
+                const targetNormalArray = geometry.attributes.targetNormal.array; 
                 
                 const tempPos = new THREE.Vector3();
-                const tempNormal = new THREE.Vector3(); // 用于暂存采样的法向
+                const tempNormal = new THREE.Vector3(); 
 
                 let currentIdx = 0;
                 const batchSize = 15000;
                 function processBatch() {
                     const limit = Math.min(currentIdx + batchSize, PARTICLE_COUNT);
                     for (; currentIdx < limit; currentIdx++) {
-                        sampler.sample(tempPos, tempNormal); // 采样的同时也获取顶点的表面法向量
+                        sampler.sample(tempPos, tempNormal); 
                         targetPosArray[currentIdx * 3] = tempPos.x;
                         targetPosArray[currentIdx * 3 + 1] = tempPos.y;
                         targetPosArray[currentIdx * 3 + 2] = tempPos.z;
@@ -519,7 +543,7 @@
                     }
                     if (currentIdx < PARTICLE_COUNT) { requestAnimationFrame(processBatch); } else {
                         geometry.attributes.targetPosition.needsUpdate = true;
-                        geometry.attributes.targetNormal.needsUpdate = true; // 更新 GPU 里的法向属性
+                        geometry.attributes.targetNormal.needsUpdate = true; 
                         if (STATE.currentSolidMesh) mainGroup.remove(STATE.currentSolidMesh);
                         mergedGeometry.computeVertexNormals();
                         STATE.currentSolidMesh = new THREE.Mesh(mergedGeometry, solidMaterial);
@@ -543,19 +567,233 @@
             list.innerHTML = '';
             STATE.files.forEach((file, index) => {
                 const li = document.createElement('li');
-                li.className = `px-3 py-2 rounded truncate transition-all duration-300 ${index === STATE.currentIndex ? 'bg-gold/20 text-white border border-gold/30' : 'text-gray-400 border border-transparent'}`;
-                li.innerText = file.name; list.appendChild(li);
+                li.className = `px-3 py-2 rounded truncate transition-all duration-300 cursor-pointer hover:bg-white/5 ${index === STATE.currentIndex ? 'bg-gold/20 text-white border border-gold/30' : 'text-gray-400 border border-transparent'}`;
+                li.innerText = file.name;
+                li.addEventListener('click', () => {
+                    switchModelTo(index);
+                });
+                list.appendChild(li);
+            });
+        }
+
+        // --- 3D转盘选择器渲染、交互函数 (升级为纯白发光字，点控拖拽与直线滚动机制) ---
+        function initWheelUI() {
+            const container = document.getElementById('wheel-items');
+            if (!container) return;
+            container.innerHTML = '';
+
+            PRELOAD_MODELS.forEach((model, i) => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'absolute pointer-events-auto cursor-pointer flex items-center gap-5 transition-all duration-300 select-none';
+                itemDiv.id = `wheel-item-${i}`;
+                itemDiv.innerHTML = `
+                    <!-- 极简日冕双环指示器 -->
+                    <div class="relative flex items-center justify-center w-5 h-5">
+                        <div class="absolute w-3 h-3 rounded-full border border-gold/30 transition-all duration-300" id="wheel-dot-outer-${i}"></div>
+                        <div class="w-1.5 h-1.5 rounded-full bg-gold/50 transition-all duration-300" id="wheel-dot-${i}"></div>
+                    </div>
+                    <!-- 瓦当名称与拼音副标题 -->
+                    <div class="flex flex-col">
+                        <span class="text-[15px] font-normal tracking-[0.16em] transition-all duration-300" id="wheel-text-${i}">${model.name.replace('.obj', '')}</span>
+                        <span class="text-[9px] uppercase tracking-[0.22em] scale-90 origin-left opacity-0 transition-all duration-300" id="wheel-subtext-${i}">${model.pinyin}</span>
+                    </div>
+                `;
+                
+                itemDiv.addEventListener('click', () => {
+                    if (!STATE.isMorphing) {
+                        switchModelTo(i);
+                    }
+                });
+                container.appendChild(itemDiv);
+            });
+            setupWheelLayout();
+        }
+
+        // 动态计算 SVG 的圆弧路径与刻度位置（高度调至40%，并外移）
+        function setupWheelLayout() {
+            const centerY = getWheelCenterY(); 
+            const arcTrack = document.getElementById('wheel-arc-track');
+            const arcDash = document.getElementById('wheel-arc-dash');
+            const focusPointer = document.getElementById('wheel-focus-pointer');
+            const focusDot = document.getElementById('wheel-focus-dot');
+
+            if (!arcTrack) return;
+
+            const startAngle = -1.0;
+            const endAngle = 1.0;
+            
+            const x1 = X_c + R * Math.cos(startAngle);
+            const y1 = centerY + R * Math.sin(startAngle);
+            const x2 = X_c + R * Math.cos(endAngle);
+            const y2 = centerY + R * Math.sin(endAngle);
+
+            arcTrack.setAttribute('d', `M ${x1} ${y1} A ${R} ${R} 0 0 1 ${x2} ${y2}`);
+            arcDash.setAttribute('d', `M ${x1 - 10} ${y1} A ${R - 10} ${R - 10} 0 0 1 ${x2 - 10} ${y2}`);
+
+            const focusX = X_c + R;
+            const focusY = centerY;
+            focusPointer.setAttribute('x1', focusX - 15);
+            focusPointer.setAttribute('y1', focusY);
+            focusPointer.setAttribute('x2', focusX + 15);
+            focusPointer.setAttribute('y2', focusY);
+
+            focusDot.setAttribute('cx', focusX);
+            focusDot.setAttribute('cy', focusY);
+        }
+
+        // 滚轮交互阻尼惯性算法：融合弧位拖动、直觉式垂直位移与滚轮
+        function initWheelInteractions() {
+            const dragArea = document.getElementById('wheel-interactive-area');
+            const selectorContainer = document.getElementById('wheel-selector-container');
+            if (!dragArea) return;
+
+            let isDraggingWheel = false;
+            let dragStartY = 0;
+            let dragStartWheelAngle = 0;
+
+            dragArea.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                isDraggingWheel = true;
+                dragArea.setPointerCapture(e.pointerId);
+
+                dragStartY = e.clientY; 
+                dragStartWheelAngle = STATE.targetWheelAngle;
+            });
+
+            dragArea.addEventListener('pointermove', (e) => {
+                if (!isDraggingWheel) return;
+                e.stopPropagation();
+
+                // 物理惯性：将直觉式的线性上下滑动直接解算为物理角旋转
+                let deltaY = e.clientY - dragStartY;
+                let deltaAngle = deltaY * 0.004; 
+
+                let targetAngle = dragStartWheelAngle + deltaAngle;
+
+                const minClamp = -3 * beta - 0.35;
+                const maxClamp = 0 * beta + 0.35;
+                STATE.targetWheelAngle = Math.max(minClamp, Math.min(targetAngle, maxClamp));
+            });
+
+            const endDrag = (e) => {
+                if (!isDraggingWheel) return;
+                isDraggingWheel = false;
+                dragArea.releasePointerCapture(e.pointerId);
+
+                const closestIndex = Math.max(0, Math.min(Math.round(-STATE.targetWheelAngle / beta), 3));
+                STATE.targetWheelAngle = -closestIndex * beta;
+
+                if (closestIndex !== STATE.currentIndex && !STATE.isMorphing) {
+                    switchModelTo(closestIndex);
+                }
+            };
+
+            dragArea.addEventListener('pointerup', endDrag);
+            dragArea.addEventListener('pointercancel', endDrag);
+
+            if (selectorContainer) {
+                selectorContainer.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation(); 
+
+                    if (STATE.isMorphing) return;
+
+                    const direction = Math.sign(e.deltaY);
+                    let nextIndex = STATE.currentIndex + direction;
+                    nextIndex = Math.max(0, Math.min(nextIndex, PRELOAD_MODELS.length - 1));
+
+                    if (nextIndex !== STATE.currentIndex) {
+                        switchModelTo(nextIndex);
+                    }
+                }, { passive: false });
+            }
+        }
+
+        // 帧刷新转盘高规格视觉：选中项文字完美升级为纯白色，散发尊贵白金全息辉光
+        function updateWheel() {
+            STATE.wheelAngle = THREE.MathUtils.lerp(STATE.wheelAngle, STATE.targetWheelAngle, 0.25);
+
+            const centerY = getWheelCenterY();
+            
+            PRELOAD_MODELS.forEach((model, i) => {
+                const itemDiv = document.getElementById(`wheel-item-${i}`);
+                if (!itemDiv) return;
+
+                const angle = i * beta + STATE.wheelAngle;
+                const dotX = X_c + R * Math.cos(angle);
+                const dotY = centerY + R * Math.sin(angle);
+
+                itemDiv.style.transform = `translate(${dotX}px, ${dotY - 18}px)`;
+
+                const distanceToFocus = Math.abs(angle);
+                const maxProximityDist = 0.8;
+                let factor = 1.0 - Math.min(distanceToFocus / maxProximityDist, 1.0);
+                factor = Math.pow(factor, 2.0); 
+
+                const dot = document.getElementById(`wheel-dot-${i}`);
+                const dotOuter = document.getElementById(`wheel-dot-outer-${i}`);
+                const text = document.getElementById(`wheel-text-${i}`);
+                const subtext = document.getElementById(`wheel-subtext-${i}`);
+
+                if (dot && text && subtext) {
+                    const scale = 0.85 + factor * 0.45;    
+                    const opacity = 0.22 + factor * 0.78;  
+                    
+                    text.style.transform = `scale(${scale})`;
+                    text.style.transformOrigin = 'left center';
+                    text.style.opacity = opacity;
+                    
+                    if (i === STATE.currentIndex) {
+                        // 选中态：极具数智科幻感的高级纯白色高亮文字，辅以白金全息霓虹效果
+                        text.style.color = '#FFFFFF'; 
+                        text.style.textShadow = '0 0 10px rgba(255, 255, 255, 0.95), 0 0 20px rgba(255, 215, 0, 0.45)';
+                        text.style.fontWeight = '500';
+                        
+                        dot.style.transform = 'scale(1.5)';
+                        dot.style.backgroundColor = '#FFD700';
+                        if (dotOuter) {
+                            dotOuter.style.transform = 'scale(2.0)';
+                            dotOuter.style.borderColor = '#FFD700';
+                            dotOuter.style.boxShadow = '0 0 8px rgba(255, 215, 0, 0.6)';
+                        }
+                        
+                        subtext.style.opacity = '1';
+                        subtext.style.color = 'rgba(255, 215, 0, 0.7)';
+                    } else {
+                        // 非选中态：典雅清爽半透明浅白
+                        text.style.color = 'rgba(255, 255, 255, 0.5)';
+                        text.style.textShadow = 'none';
+                        text.style.fontWeight = '300';
+                        
+                        dot.style.transform = 'scale(1.0)';
+                        dot.style.backgroundColor = 'rgba(255, 215, 0, 0.3)';
+                        if (dotOuter) {
+                            dotOuter.style.transform = 'scale(1.0)';
+                            dotOuter.style.borderColor = 'rgba(255, 215, 0, 0.3)';
+                            dotOuter.style.boxShadow = 'none';
+                        }
+                        
+                        subtext.style.opacity = '0';
+                    }
+                    
+                    if (Math.abs(angle) > 1.25) {
+                        itemDiv.style.display = 'none';
+                    } else {
+                        itemDiv.style.display = 'flex';
+                    }
+                }
             });
         }
 
         async function switchModelTo(index) {
             if (STATE.isMorphing) return;
             STATE.currentIndex = index; updateFileListUI();
+            STATE.targetWheelAngle = -index * beta;
+
             STATE.isSolidMode = false; STATE.solidMorphProgress = 0;
             STATE.isMorphing = true;
             await animateMorph(STATE.morphProgress, 0, 300);
 
-            // 获取文本（通过懒加载函数或真实的File对象皆兼容）
             const text = await STATE.files[index].text();
             
             parseAndSampleOBJ(text, async (success) => {
@@ -582,6 +820,7 @@
             });
         }
 
+        // 生成AI解说词
         function generateAICommentary(filename) {
             const aiText = document.getElementById('ai-text');
             const aiTitle = document.getElementById('ai-title');
@@ -614,17 +853,15 @@
                 const pitch = (landmarks[9].y - landmarks[0].y) / Math.hypot(landmarks[9].x-landmarks[0].x, landmarks[9].y-landmarks[0].y);
                 STATE.targetRotationX = Math.max(0, Math.min((pitch + 0.4) * Math.PI * 1.2, Math.PI));
                 
-                // 1. 各手指弯曲判定（比较指尖到手腕与PIP关节到手腕的距离，完美适应手部任意旋转角度）
+                // 各手指弯曲判定
                 const indexFolded = Math.hypot(landmarks[8].x - landmarks[0].x, landmarks[8].y - landmarks[0].y) < Math.hypot(landmarks[6].x - landmarks[0].x, landmarks[6].y - landmarks[0].y);
                 const middleFolded = Math.hypot(landmarks[12].x - landmarks[0].x, landmarks[12].y - landmarks[0].y) < Math.hypot(landmarks[10].x - landmarks[0].x, landmarks[10].y - landmarks[0].y);
                 const ringFolded = Math.hypot(landmarks[16].x - landmarks[0].x, landmarks[16].y - landmarks[0].y) < Math.hypot(landmarks[14].x - landmarks[0].x, landmarks[14].y - landmarks[0].y);
                 const pinkyFolded = Math.hypot(landmarks[20].x - landmarks[0].x, landmarks[20].y - landmarks[0].y) < Math.hypot(landmarks[18].x - landmarks[0].x, landmarks[18].y - landmarks[0].y);
 
-                // 2. 握拳判定：中指、无名指、小指、食指中，至少有3个手指是弯曲折叠状态
                 const foldedCount = (indexFolded ? 1 : 0) + (middleFolded ? 1 : 0) + (ringFolded ? 1 : 0) + (pinkyFolded ? 1 : 0);
                 const isFist = foldedCount >= 3;
 
-                // 3. OK手势判定：食指与拇指指尖捏合，且中、无名、小指必须均呈伸展状态
                 const pinch = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y);
                 const isOK = pinch < 0.05 && !middleFolded && !ringFolded && !pinkyFolded;
 
@@ -655,7 +892,7 @@
             new Camera(document.getElementById('video-input'), { onFrame: async () => await hands.send({image: document.getElementById('video-input')}), width: 320, height: 180 }).start();
         });
 
-        // --- 鼠标滚轮、点击拖拽旋转、平板捏合缩放、双击及长按逻辑 ---
+        // --- 全局触控、3D 空间拖动与滚轮缩放体系 ---
         let isPointerDown = false;
         let pointerStart = { x: 0, y: 0 };
         let pointerLast = { x: 0, y: 0 };
@@ -665,28 +902,30 @@
         let longPressTimer = null;
         let lastPointerDownTime = 0;
 
-        // 计算双指间距
         function getDistance(p1, p2) {
             return Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
         }
 
         container.addEventListener('pointerdown', (e) => {
-            if (e.target.closest('.glass-panel') || e.target.closest('button') || e.target.closest('label') || e.target.closest('input')) return;
+            if (e.target.closest('.glass-panel') || e.target.closest('button') || e.target.closest('label') || e.target.closest('input') || e.target.closest('#wheel-selector-container')) return;
             
+            // 拦截移动端多点触控与默认滚动行为，保障拖动 3D 模型旋转时的流畅度
+            if (e.pointerType === 'touch') {
+                e.preventDefault();
+            }
+
             isPointerDown = true;
             activePointers.push(e);
             pointerStart = { x: e.clientX, y: e.clientY };
             pointerLast = { x: e.clientX, y: e.clientY };
 
             const now = performance.now();
-            // 连续快速双击两下切换虚实转化
             if (now - lastPointerDownTime < 300) {
                 if (!STATE.isMorphing) {
                     STATE.isSolidMode = !STATE.isSolidMode;
                 }
                 if (longPressTimer) clearTimeout(longPressTimer);
             } else {
-                // 点击长按逻辑，按住 800ms 切换下一个模型
                 if (longPressTimer) clearTimeout(longPressTimer);
                 longPressTimer = setTimeout(() => {
                     if (STATE.files.length > 1 && !STATE.isMorphing) {
@@ -709,7 +948,10 @@
 
             if (!isPointerDown) return;
 
-            // 移动超出 10px 即取消长按判定
+            if (e.pointerType === 'touch') {
+                e.preventDefault();
+            }
+
             const distMoved = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
             if (distMoved > 10 && longPressTimer) {
                 clearTimeout(longPressTimer);
@@ -717,14 +959,12 @@
             }
 
             if (activePointers.length === 1) {
-                // 鼠标/单指拖拽旋转模型
                 const dx = e.clientX - pointerLast.x;
                 const dy = e.clientY - pointerLast.y;
                 STATE.targetRotationY += dx * 0.008;
                 STATE.targetRotationX = Math.max(-Math.PI, Math.min(STATE.targetRotationX + dy * 0.008, Math.PI));
                 pointerLast = { x: e.clientX, y: e.clientY };
             } else if (activePointers.length === 2) {
-                // 双指捏合放大缩小模型
                 const dist = getDistance(activePointers[0], activePointers[1]);
                 if (initialPinchDist > 0) {
                     const factor = dist / initialPinchDist;
@@ -748,7 +988,6 @@
         window.addEventListener('pointerup', endPointer);
         window.addEventListener('pointercancel', endPointer);
 
-        // 鼠标滚轮缩放模型
         container.addEventListener('wheel', (e) => {
             e.preventDefault();
             const zoomSpeed = 0.08;
@@ -756,7 +995,7 @@
             STATE.targetScale = Math.max(0.6, Math.min(STATE.targetScale + delta * zoomSpeed, 2.5));
         }, { passive: false });
 
-        // --- 触发懒加载预存 ---
+        // --- 触发预存加载 ---
         initPreloadModels();
 
         function animate() {
@@ -768,35 +1007,39 @@
             shaderMaterial.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
             if (solidMaterial.userData.shader) solidMaterial.userData.shader.uniforms.uSolidProgress.value = STATE.solidMorphProgress;
             
-            // 提高旋转惯性过渡速度（从 0.08 提高到 0.22），使鼠标松开/停下后模型立刻精确刹车，不发生漂移
             STATE.currentRotationY = THREE.MathUtils.lerp(STATE.currentRotationY, STATE.targetRotationY, 0.22);
             STATE.currentRotationX = THREE.MathUtils.lerp(STATE.currentRotationX, STATE.targetRotationX, 0.22);
             STATE.currentScale = THREE.MathUtils.lerp(STATE.currentScale, STATE.targetScale, 0.1);
             
-            // 将实时缩放因子传递给 Shader，动态改变粒子呈现尺寸
             shaderMaterial.uniforms.uScale.value = STATE.currentScale;
 
             mainGroup.rotation.set(STATE.currentRotationX, STATE.currentRotationY, 0);
             mainGroup.scale.setScalar(STATE.currentScale);
             mainGroup.position.y = Math.sin(time * 0.5) * 0.1;
+
+            // 每帧渲染左侧转盘姿态
+            updateWheel();
+
             composer.render();
         }
         animate();
+        
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
+            setupWheelLayout();
         });
     </script>
 
     <script>
-        // 监听来自父页面（Unity）的消息并处理（可选）
+        // 监听来自父页面的消息（可选）
         window.addEventListener('message', function(event) {
             if (event.data === 'fromParent: i am ready') {
                 console.log('手势网站已准备好与 Unity 父页面通信');
             }
         });
 
-        // 当用户点击返回按钮时，通知父页面关闭手势覆盖层
+        // 返回按钮逻辑
         document.getElementById('backToUnityBtn').addEventListener('click', function() {
             window.parent.postMessage('fromGesture: close me', '*');
         });
