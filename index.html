@@ -10,7 +10,6 @@
             theme: {
                 extend: {
                     colors: {
-                        museum: '#000000',
                         gold: '#FFD700',
                     }
                 }
@@ -464,7 +463,8 @@
             const canvas = document.createElement('canvas');
             canvas.width = 1024; canvas.height = 1024;
             const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#5a5248'; 
+            // 将基础背景颜色微调调亮，避免暗沉
+            ctx.fillStyle = '#9c866d'; 
             ctx.fillRect(0, 0, 1024, 1024);
             for (let i = 0; i < 350000; i++) {
                 const x = Math.random() * 1024; const y = Math.random() * 1024;
@@ -476,9 +476,10 @@
 
         const solidMaterial = new THREE.MeshStandardMaterial({
             map: createWadangTexture(), 
-            roughness: 0.7, 
-            metalness: 0.2, 
-            color: 0xD2C4B1, 
+            roughness: 0.88, // 保持精致的哑光、散光漫反射质感
+            metalness: 0.05, // 保持低金属度的古朴历史风化感
+            // 微微调亮反射色，使模型在阴影区也拥有暖洋洋的透亮感
+            color: 0xE2CDAD, 
             transparent: true,
             side: THREE.DoubleSide
         });
@@ -995,6 +996,17 @@
             STATE.targetScale = Math.max(0.6, Math.min(STATE.targetScale + delta * zoomSpeed, 2.5));
         }, { passive: false });
 
+        // --- 与 Unity 父页面的通信逻辑 ---
+        window.addEventListener('message', function(event) {
+            if (event.data === 'fromParent: i am ready') {
+                console.log('手势网站已准备好与 Unity 父页面通信');
+            }
+        });
+
+        document.getElementById('backToUnityBtn').addEventListener('click', function() {
+            window.parent.postMessage('fromGesture: close me', '*');
+        });
+
         // --- 触发预存加载 ---
         initPreloadModels();
 
@@ -1028,20 +1040,6 @@
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
             setupWheelLayout();
-        });
-    </script>
-
-    <script>
-        // 监听来自父页面的消息（可选）
-        window.addEventListener('message', function(event) {
-            if (event.data === 'fromParent: i am ready') {
-                console.log('手势网站已准备好与 Unity 父页面通信');
-            }
-        });
-
-        // 返回按钮逻辑
-        document.getElementById('backToUnityBtn').addEventListener('click', function() {
-            window.parent.postMessage('fromGesture: close me', '*');
         });
     </script>
 </body>
